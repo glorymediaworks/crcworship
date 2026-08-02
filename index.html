@@ -1,0 +1,1350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Worship Console | Live Church Presentation</title>
+  <!-- React & ReactDOM CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <!-- Babel CDN for inline JSX -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+    kbd { box-shadow: 0 -1px 0 0 rgba(148,163,184,.3) inset; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans min-h-screen selection:bg-indigo-500 selection:text-white overflow-hidden">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useCallback } = React;
+
+    // ============================================================
+    //  THEME + API CONSTANTS
+    // ============================================================
+    const ACCENT = '#6366F1'; // indigo / violet accent
+    const SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbyUU7xzuRTD7rL-8GqZyXe9g6TDjb10QTvtZQyk6qca02Q1Fl6DakR0SBkwTEzorSLuwA/exec';
+    const IMAGE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbxb3wysS_kPuPLalOBO2zNBpd8DieoPqIUppy0iJfw6iyrJDQ7x4SEvytyuKYLK1AZL0A/exec';
+
+    // ============================================================
+    //  SECTION-BASED LYRIC PARSER
+    //  - Respect natural line breaks first (short lines stay on 1 slide)
+    //  - If a line exceeds 5 words, wrap into 5-word micro-slides
+    //  - Any [...] header switches the section
+    //  - Returns { slides, sectionsJson }
+    // ============================================================
+    function parseLyricsToSlides(itemId, rawText) {
+      const MAX_WORDS = 5;
+      const slides = [];
+      const sectionsJson = [];
+      let currentTag = 'VERSE 1';
+      let currentSectionSlides = [];
+      const lines = rawText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
+      const pushSlide = (tag, content) => {
+        if (!content) return;
+        slides.push({
+          id: `${itemId}-slide-${slides.length}`,
+          itemId,
+          tag,
+          content,
+          wordCount: content.split(/\s+/).filter(Boolean).length
+        });
+        currentSectionSlides.push(content);
+      };
+
+      const flushSection = () => {
+        if (currentSectionSlides.length > 0) {
+          sectionsJson.push({ name: currentTag, slides: [...currentSectionSlides] });
+        }
+        currentSectionSlides = [];
+      };
+
+      for (const line of lines) {
+        // ANY text in brackets = section header (standalone OR inline with lyrics)
+        const headerMatch = line.match(/^\[([^\]]+)\]\s*(.*)$/);
+        if (headerMatch) {
+          flushSection();
+          currentTag = headerMatch[1].trim().toUpperCase() || 'VERSE 1';
+          const rest = headerMatch[2].trim();
+          if (rest) {
+            // Respect line break: this inline line is one slide if ≤5 words, else wrap
+            const words = rest.split(/\s+/).filter(Boolean);
+            if (words.length <= MAX_WORDS) {
+              pushSlide(currentTag, words.join(' '));
+            } else {
+              for (let i = 0; i < words.length; i += MAX_WORDS) {
+                pushSlide(currentTag, words.slice(i, i + MAX_WORDS).join(' '));
+              }
+            }
+          }
+          continue;
+        }
+        // Regular lyric line — respect line break first
+        const words = line.split(/\s+/).filter(Boolean);
+        if (words.length <= MAX_WORDS) {
+          // Short line stays on 1 slide
+          pushSlide(currentTag, words.join(' '));
+        } else {
+          // Long line wraps into 5-word micro-slides
+          for (let i = 0; i < words.length; i += MAX_WORDS) {
+            pushSlide(currentTag, words.slice(i, i + MAX_WORDS).join(' '));
+          }
+        }
+      }
+      flushSection();
+
+      if (slides.length === 0) {
+        slides.push({
+          id: `${itemId}-slide-0`,
+          itemId,
+          tag: 'VERSE 1',
+          content: 'NEW SONG',
+          wordCount: 2
+        });
+        sectionsJson.push({ name: 'VERSE 1', slides: ['NEW SONG'] });
+      }
+
+      return { slides, sectionsJson };
+    }
+
+    // ============================================================
+    //  GOOGLE SHEETS STORAGE & RETRIEVAL
+    // ============================================================
+    // POST a song (create or update) to the cloud library
+    // Standardized payload: { id, title, singer, sections }
+    async function postSongToSheets(song) {
+      try {
+        // Build sections array from the song's slides (grouped by tag)
+        const sections = [];
+        const map = {};
+        (song.slides || []).forEach(s => {
+          if (!map[s.tag]) {
+            map[s.tag] = [];
+            sections.push({ name: s.tag, slides: map[s.tag] });
+          }
+          map[s.tag].push(s.content);
+        });
+
+        const payload = {
+          id: song.id || ('song-' + Date.now()),
+          title: song.title || 'Untitled',
+          singer: song.singer || song.groupName || 'CRC Team',
+          sections // Array of objects: [{ name: "VERSE 1", slides: ["Slide 1 text", "Slide 2 text"] }]
+        };
+
+        await fetch(SHEETS_API_URL, {
+          method: 'POST',
+          mode: 'no-cors', // Google Apps Script Web App standard
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(payload)
+        });
+        return true;
+      } catch (e) {
+        console.error('Sheets POST failed:', e);
+        return false;
+      }
+    }
+
+    // Normalize a raw cloud record into our song shape
+    function normalizeCloudSong(raw) {
+      if (!raw) return null;
+      const song = { ...raw };
+      if (!song.title && song.name) song.title = song.name;
+      if (!song.id) song.id = `cloud-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+      // Parse sectionsJson string (if present) into song.sections
+      let sections = song.sections;
+      if (typeof sections === 'string') {
+        try { sections = JSON.parse(sections); } catch (e) { sections = []; }
+      }
+      if (!Array.isArray(sections)) sections = [];
+
+      // Build slides from sections: [{ name: "VERSE 1", slides: ["text1", "text2"] }]
+      const slides = [];
+      sections.forEach(sec => {
+        const tag = (sec.name || 'VERSE 1').toUpperCase();
+        (sec.slides || []).forEach(content => {
+          slides.push({
+            id: `${song.id}-slide-${slides.length}`,
+            itemId: song.id,
+            tag,
+            content,
+            wordCount: content.split(/\s+/).filter(Boolean).length
+          });
+        });
+      });
+
+      // Fallback: if no sections, try raw slides field
+      if (slides.length === 0) {
+        let rawSlides = song.slides;
+        if (typeof rawSlides === 'string') {
+          try { rawSlides = JSON.parse(rawSlides); } catch (e) { rawSlides = []; }
+        }
+        if (Array.isArray(rawSlides)) {
+          rawSlides.forEach((s, i) => {
+            const content = s.content || s.text || s.lyrics || '';
+            slides.push({
+              id: `${song.id}-slide-${i}`,
+              itemId: song.id,
+              tag: (s.tag || 'VERSE 1').toUpperCase(),
+              content,
+              wordCount: content.split(/\s+/).filter(Boolean).length
+            });
+          });
+        }
+      }
+
+      song.slides = slides;
+      song.sections = sections;
+      song.preview = song.preview || song.slides[0]?.content || '';
+      song.type = song.type || 'SONGS';
+      return song;
+    }
+
+    // GET the full cloud library from Google Sheets
+    async function fetchCloudLibrary() {
+      try {
+        const res = await fetch(`${SHEETS_API_URL}?action=read`);
+        if (!res.ok) return [];
+        const data = await res.json();
+        let list = [];
+        if (Array.isArray(data)) list = data;
+        else if (data && Array.isArray(data.songs)) list = data.songs;
+        else if (data && Array.isArray(data.data)) list = data.data;
+        return list.map(normalizeCloudSong).filter(Boolean);
+      } catch (e) {
+        console.error('Sheets GET failed:', e);
+        return [];
+      }
+    }
+
+    // ============================================================
+    //  IMAGE UPLOAD & COMPRESSION
+    //  - Downscale/compress to max width 1280px via Canvas
+    //  - Returns Base64 data URL
+    // ============================================================
+    function compressImageToBase64(file, maxWidth = 1280) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            let width = img.width;
+            let height = img.height;
+            if (width > maxWidth) {
+              height = Math.round((height * maxWidth) / width);
+              width = maxWidth;
+            }
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL('image/jpeg', 0.8));
+          };
+          img.onerror = reject;
+          img.src = e.target.result;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    // POST an uploaded image to the Images Apps Script endpoint
+    async function postImageToSheets(imgPayload) {
+      try {
+        await fetch(IMAGE_SHEETS_API_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(imgPayload)
+        });
+        return true;
+      } catch (e) {
+        console.error('Image POST failed:', e);
+        return false;
+      }
+    }
+
+    // GET stored images from the Images Apps Script endpoint
+    async function fetchCloudImages() {
+      try {
+        const res = await fetch(`${IMAGE_SHEETS_API_URL}?action=read`);
+        if (!res.ok) return [];
+        const data = await res.json();
+        let list = [];
+        if (Array.isArray(data)) list = data;
+        else if (data && Array.isArray(data.images)) list = data.images;
+        else if (data && Array.isArray(data.data)) list = data.data;
+        return list.map(img => ({
+          id: img.id || ('img-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6)),
+          title: img.title || img.name || 'Untitled Image',
+          category: img.category || 'General',
+          imageData: img.imageData || img.data || ''
+        })).filter(img => img.imageData);
+      } catch (e) {
+        console.error('Image GET failed:', e);
+        return [];
+      }
+    }
+
+    // ============================================================
+    //  PROJECTOR SCREEN (dual-screen output) — WHITE HUD
+    //  ⚠️ UNTOUCHED — do not modify
+    // ============================================================
+    function ProjectorStage() {
+      const [slide, setSlide] = useState({ title: 'CRC CHURCH WORSHIP', content: 'GREETINGS', songTitle: '', groupName: '' });
+      const [image, setImage] = useState(null);
+      const [fading, setFading] = useState(false);
+
+      // Fade out, swap content, fade back in (300ms)
+      const applyContent = (type, data) => {
+        setFading(true);
+        setTimeout(() => {
+          if (type === 'IMAGE') {
+            setImage(data);
+            setSlide(null);
+          } else {
+            setImage(null);
+            setSlide(data);
+          }
+          setFading(false);
+        }, 300);
+      };
+
+      useEffect(() => {
+        // Hydrate from saved last state
+        try {
+          const saved = localStorage.getItem('worship_console_last_slide');
+          if (saved) {
+            const s = JSON.parse(saved);
+            if (s.imageData) { setImage({ imageData: s.imageData, title: s.title || '' }); }
+            else setSlide(s);
+          }
+        } catch (e) {}
+
+        // BroadcastChannel — realtime sync from control console
+        const channel = new BroadcastChannel('worship-console-sync');
+        channel.onmessage = (e) => {
+          if (!e.data) return;
+          if (e.data.type === 'SLIDE_CHANGE') {
+            applyContent('SLIDE', e.data.slide);
+            try { localStorage.setItem('worship_console_last_slide', JSON.stringify(e.data.slide)); } catch (err) {}
+          } else if (e.data.type === 'IMAGE_CHANGE') {
+            applyContent('IMAGE', e.data.payload);
+            try { localStorage.setItem('worship_console_last_slide', JSON.stringify({ ...e.data.payload, imageData: e.data.payload.imageData })); } catch (err) {}
+          }
+        };
+        return () => channel.close();
+      }, []);
+
+      return (
+        <div className="w-screen h-screen bg-white flex flex-col select-none overflow-hidden no-scrollbar relative">
+          {/* Main content — large high-contrast black text centered OR full image */}
+          {image ? (
+            <div className="flex-1 relative overflow-hidden">
+              <img
+                src={image.imageData}
+                alt={image.title || 'Image'}
+                className="absolute inset-0 w-full h-full object-contain"
+                style={{ transition: 'opacity 300ms ease-in-out', opacity: fading ? 0 : 1 }}
+              />
+            </div>
+          ) : (
+            <div className="flex-1 flex flex-col justify-center items-center px-16 text-center">
+              <p
+                className="text-5xl md:text-7xl lg:text-8xl font-black tracking-wide leading-[1.15] whitespace-pre-line text-black uppercase max-w-6xl"
+                style={{ transition: 'opacity 300ms ease-in-out', opacity: fading ? 0 : 1 }}
+              >
+                {slide?.content}
+              </p>
+            </div>
+          )}
+
+          {/* HUD Footer — clean, minimal, small subtle black text */}
+          <div className="absolute bottom-0 inset-x-0 px-8 py-4 flex justify-between items-end select-none">
+            <span className="text-xs md:text-sm font-medium text-black/60 uppercase tracking-wide">
+              {slide.songTitle || slide.title || ''}
+            </span>
+            <span className="text-xs md:text-sm font-medium text-black/60 uppercase tracking-wide">
+              CRC Coimbatore
+            </span>
+            <span className="text-xs md:text-sm font-medium text-black/60 uppercase tracking-wide">
+              {slide.groupName || ''}
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================================
+    //  MAIN CONTROL CONSOLE
+    // ============================================================
+    function PresenterConsole() {
+      // ⚠️ EMPTY INITIAL STATE — no dummy data, no pre-loaded slides
+      const [serviceQueue, setServiceQueue] = useState([]);
+      const [cloudLibrary, setCloudLibrary] = useState([]);
+      const [searchQuery, setSearchQuery] = useState('');
+      const [activeItemId, setActiveItemId] = useState('');
+      // Composite selection state — uniquely identifies ONE slide card:
+      // activeSectionIdx = index of the section group (VERSE 1, CHORUS, ...)
+      // activeSlideIdx   = index of the slide WITHIN that section group
+      const [activeSectionIdx, setActiveSectionIdx] = useState(0);
+      const [activeSlideIdx, setActiveSlideIdx] = useState(0);
+      const [pasteOpen, setPasteOpen] = useState(false);
+      const [proWindowOpen, setProWindowOpen] = useState(false);
+      const [cloudStatus, setCloudStatus] = useState('loading');
+      const [saveStatus, setSaveStatus] = useState('');
+      const [cloudImages, setCloudImages] = useState([]);
+      const [imageStatus, setImageStatus] = useState('loading');
+      const [imageUploading, setImageUploading] = useState(false);
+      const fileInputRef = React.createRef();
+
+      // Fetch cloud library from Google Sheets on mount
+      const refreshCloud = useCallback(() => {
+        setCloudStatus('loading');
+        fetchCloudLibrary().then(songs => {
+          setCloudLibrary(songs);
+          setCloudStatus('ready');
+        }).catch(() => {
+          setCloudStatus('error');
+        });
+      }, []);
+
+      useEffect(() => {
+        refreshCloud();
+      }, [refreshCloud]);
+
+      // Fetch cloud images from the Images Apps Script endpoint on mount
+      useEffect(() => {
+        setImageStatus('loading');
+        fetchCloudImages().then(images => {
+          setCloudImages(images);
+          setImageStatus('ready');
+        }).catch(() => {
+          setImageStatus('error');
+        });
+      }, []);
+
+      // Active item from the service queue
+      const activeItem = serviceQueue.find(i => i.id === activeItemId) || null;
+
+      // Group the active item's slides by section tag.
+      // Each slide carries its original flat index within the item so we can
+      // navigate sequentially across section boundaries.
+      const groupedSlides = useMemo(() => {
+        const groups = [];
+        const map = {};
+        (activeItem?.slides || []).forEach((s, flatIdx) => {
+          if (!map[s.tag]) {
+            map[s.tag] = [];
+            groups.push({ tag: s.tag, slides: map[s.tag] });
+          }
+          map[s.tag].push({ ...s, flatIdx });
+        });
+        return groups;
+      }, [activeItem]);
+
+      // Reset selection whenever the active item changes
+      useEffect(() => {
+        setActiveSectionIdx(0);
+        setActiveSlideIdx(0);
+      }, [activeItemId]);
+
+      // The currently selected slide — resolved from composite state.
+      const currentSlide = groupedSlides[activeSectionIdx]?.slides[activeSlideIdx] || null;
+
+      // Flat index of the current slide within the active item (for nav).
+      const currentFlatIdx = currentSlide ? currentSlide.flatIdx : 0;
+
+      const currentDisplayTitle = currentSlide && activeItem
+        ? `${activeItem.title} (${currentSlide.tag})`.toUpperCase()
+        : '';
+
+      // Convert a flat index back into section+slide composite state.
+      const setSelectionFromFlat = useCallback((flatIdx) => {
+        for (let si = 0; si < groupedSlides.length; si++) {
+          const gi = groupedSlides[si].slides.findIndex(s => s.flatIdx === flatIdx);
+          if (gi !== -1) {
+            setActiveSectionIdx(si);
+            setActiveSlideIdx(gi);
+            return;
+          }
+        }
+      }, [groupedSlides]);
+
+      // Broadcast live content (slide OR image) over BroadcastChannel + persist.
+      useEffect(() => {
+        const channel = new BroadcastChannel('worship-console-sync');
+        if (activeItem && activeItem.type === 'IMAGE' && activeItem.imageData) {
+          // Broadcast image change to projector
+          const payload = { imageData: activeItem.imageData, title: activeItem.title || '' };
+          channel.postMessage({ type: 'IMAGE_CHANGE', payload });
+          channel.close();
+          try { localStorage.setItem('worship_console_last_slide', JSON.stringify({ ...payload, imageData: payload.imageData })); } catch (e) {}
+          return;
+        }
+        if (!currentSlide) { channel.close(); return; }
+        const payload = {
+          title: currentDisplayTitle || currentSlide.tag || '',
+          content: currentSlide.content || '',
+          tag: currentSlide.tag || '',
+          songTitle: activeItem?.title || '',
+          groupName: activeItem?.groupName || ''
+        };
+        channel.postMessage({ type: 'SLIDE_CHANGE', slide: payload });
+        channel.close();
+        try { localStorage.setItem('worship_console_last_slide', JSON.stringify(payload)); } catch (e) {}
+      }, [currentSlide, activeItem, currentDisplayTitle]);
+
+      // Keyboard navigation — advances sequentially across section boundaries.
+      useEffect(() => {
+        const handler = (e) => {
+          if (pasteOpen) return;
+          const t = e.target;
+          if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+          if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter') {
+            e.preventDefault();
+            if (activeItem && activeItem.slides.length > 0) {
+              setSelectionFromFlat(Math.min(currentFlatIdx + 1, activeItem.slides.length - 1));
+            }
+          } else if (e.key === 'ArrowLeft' || e.key === 'Backspace') {
+            e.preventDefault();
+            if (activeItem && activeItem.slides.length > 0) {
+              setSelectionFromFlat(Math.max(currentFlatIdx - 1, 0));
+            }
+          }
+        };
+        window.addEventListener('keydown', handler);
+        return () => window.removeEventListener('keydown', handler);
+      }, [pasteOpen, currentFlatIdx, activeItem, setSelectionFromFlat]);
+
+      // Detect if popout window closes
+      useEffect(() => {
+        const check = setInterval(() => {
+          setProWindowOpen(w => w && !w.closed);
+        }, 2000);
+        return () => clearInterval(check);
+      }, []);
+
+      const openProfessionalWindow = () => {
+        const url = window.location.origin + window.location.pathname + '?mode=projector';
+        const w = window.open(url, 'ProjectorScreen', 'width=1280,height=720,menubar=no,toolbar=no,location=no,status=no');
+        setProWindowOpen(w);
+      };
+
+      // Filtered cloud library based on sidebar search query (songs)
+      const filteredCloud = useMemo(() => {
+        const q = searchQuery.trim().toLowerCase();
+        if (!q) return cloudLibrary;
+        return cloudLibrary.filter(s =>
+          (s.title || '').toLowerCase().includes(q) ||
+          (s.groupName || '').toLowerCase().includes(q)
+        );
+      }, [cloudLibrary, searchQuery]);
+
+      // Filtered cloud images (search by title / category)
+      const filteredImages = useMemo(() => {
+        const q = searchQuery.trim().toLowerCase();
+        if (!q) return cloudImages;
+        return cloudImages.filter(img =>
+          (img.title || '').toLowerCase().includes(q) ||
+          (img.category || '').toLowerCase().includes(q)
+        );
+      }, [cloudImages, searchQuery]);
+
+      // Handle image file selection: compress + upload to cloud + add to queue
+      const handleImageFile = async (e) => {
+        const file = e.target.files && e.target.files[0];
+        e.target.value = '';
+        if (!file) return;
+        if (!/image\/(jpeg|png)/.test(file.type)) {
+          alert('Please select a .jpg or .png image file.');
+          return;
+        }
+        setImageUploading(true);
+        try {
+          const base64 = await compressImageToBase64(file);
+          const filename = (file.name || 'image').replace(/\.(jpg|jpeg|png)$/i, '');
+          const title = (prompt('Image Title (optional):', filename) || filename).trim();
+          const category = (prompt('Category (default: General):', 'General') || 'General').trim();
+          const payload = { id: 'img-' + Date.now(), title, category, imageData: base64 };
+          await postImageToSheets(payload);
+          const imgObj = { id: payload.id, title, category, imageData: base64 };
+          setCloudImages(prev => [...prev, imgObj]);
+          addImageToQueue(imgObj);
+        } catch (err) {
+          console.error('Image upload failed:', err);
+          alert('Image upload failed. Please try again.');
+        } finally {
+          setImageUploading(false);
+        }
+      };
+
+      // Push an image into today's active Service Items queue
+      const addImageToQueue = (img) => {
+        const newId = `imgqueue-${Date.now()}`;
+        const queued = {
+          id: newId,
+          type: 'IMAGE',
+          title: img.title || 'Untitled Image',
+          imageData: img.imageData,
+          slides: []
+        };
+        setServiceQueue(prev => [...prev, queued]);
+        setActiveItemId(newId);
+        setActiveSectionIdx(0);
+        setActiveSlideIdx(0);
+      };
+
+      // Add a cloud song into today's service queue
+      const addToQueue = (song) => {
+        const newId = `queue-${Date.now()}`;
+        const queued = {
+          ...song,
+          id: newId,
+          type: song.type || 'SONGS',
+          slides: (song.slides || []).map((s, i) => ({
+            ...s,
+            id: `${newId}-slide-${i}`,
+            itemId: newId
+          }))
+        };
+        setServiceQueue(prev => [...prev, queued]);
+        setActiveItemId(newId);
+        setActiveSectionIdx(0);
+        setActiveSlideIdx(0);
+      };
+
+      // Add a new song from pasted lyrics — auto-split + POST to Sheets
+      const addSongFromLyrics = async (title, rawText, groupName) => {
+        const newId = `cat-${Date.now()}`;
+        const { slides, sectionsJson } = parseLyricsToSlides(newId, rawText);
+        // Fallback: if title blank, use first line of lyrics as title
+        const fallbackTitle = rawText.split('\n').map(l => l.trim()).find(l => l.length > 0) || 'NEW SONG';
+        const finalTitle = (title || fallbackTitle).toUpperCase();
+        const newSong = {
+          id: newId,
+          type: 'SONGS',
+          title: finalTitle,
+          groupName: groupName || '',
+          preview: slides[0]?.content || '',
+          slides,
+          sectionsJson
+        };
+        setServiceQueue(prev => [...prev, newSong]);
+        setActiveItemId(newId);
+        setActiveSectionIdx(0);
+        setActiveSlideIdx(0);
+        setPasteOpen(false);
+        // POST to Google Sheets cloud library (fire-and-forget)
+        postSongToSheets(newSong);
+      };
+
+      // Add a blank info / announcement item to the queue
+      const addInfoItem = () => {
+        const newId = `info-${Date.now()}`;
+        const newItem = {
+          id: newId,
+          type: 'ANNOUNCEMENTS',
+          title: 'NEW INFO',
+          groupName: '',
+          preview: 'CLICK TO EDIT',
+          slides: [{
+            id: `${newId}-slide-0`,
+            itemId: newId,
+            tag: 'INFO',
+            content: 'NEW INFO',
+            wordCount: 2
+          }]
+        };
+        setServiceQueue(prev => [...prev, newItem]);
+        setActiveItemId(newId);
+        setActiveSectionIdx(0);
+        setActiveSlideIdx(0);
+      };
+
+      // Remove a song from the service queue
+      const removeFromQueue = (id) => {
+        setServiceQueue(prev => {
+          const next = prev.filter(i => i.id !== id);
+          if (activeItemId === id) {
+            setActiveItemId(next[0]?.id || '');
+            setActiveSectionIdx(0);
+            setActiveSlideIdx(0);
+          }
+          return next;
+        });
+      };
+
+      // Delete a song from the cloud library (local removal)
+      const deleteFromCloud = (id) => {
+        setCloudLibrary(prev => prev.filter(s => s.id !== id));
+      };
+
+      // Inline rename of song title / singer name in the sidebar queue
+      const renameQueueItem = (id, field, value) => {
+        setServiceQueue(prev => prev.map(i => i.id === id ? { ...i, [field]: value } : i));
+      };
+
+      // Update a slide's content (manual editing on the grid)
+      const updateSlideContent = (slideId, content) => {
+        if (!activeItem) return;
+        const words = content.split(/\s+/).filter(Boolean).length;
+        setServiceQueue(prev => prev.map(i => {
+          if (i.id !== activeItem.id) return i;
+          const slides = i.slides.map(s => s.id === slideId ? { ...s, content, wordCount: words } : s);
+          return { ...i, slides, preview: slides[0]?.content || i.preview };
+        }));
+      };
+
+      // Delete a slide from the active item
+      const deleteSlide = (slideId) => {
+        if (!activeItem) return;
+        setServiceQueue(prev => prev.map(i => {
+          if (i.id !== activeItem.id) return i;
+          const slides = i.slides.filter(s => s.id !== slideId);
+          return { ...i, slides, preview: slides[0]?.content || i.preview };
+        }));
+        setActiveSectionIdx(0);
+        setActiveSlideIdx(0);
+      };
+
+      // Add a blank slide under a section header
+      const addSlideToSection = (tag) => {
+        if (!activeItem) return;
+        setServiceQueue(prev => prev.map(i => {
+          if (i.id !== activeItem.id) return i;
+          const nid = `${i.id}-slide-${Date.now()}`;
+          const newSlide = { id: nid, itemId: i.id, tag: tag || 'VERSE 1', content: '', wordCount: 0 };
+          return { ...i, slides: [...i.slides, newSlide] };
+        }));
+      };
+
+      // Save all manual edits + structural changes back to Google Sheets
+      const saveEditsToCloud = async () => {
+        if (!activeItem) return;
+        setSaveStatus('saving');
+        // Rebuild sectionsJson from the current (edited) slides
+        const sectionsJson = [];
+        const map = {};
+        activeItem.slides.forEach(s => {
+          if (!map[s.tag]) {
+            map[s.tag] = [];
+            sectionsJson.push({ name: s.tag, slides: map[s.tag] });
+          }
+          map[s.tag].push(s.content);
+        });
+        const updatedSong = { ...activeItem, sectionsJson };
+        const ok = await postSongToSheets(updatedSong);
+        setSaveStatus(ok ? 'saved' : 'error');
+        setTimeout(() => setSaveStatus(''), 2500);
+      };
+
+      // Timeline -> display "SLIDE X / Y"
+      const slideCountLabel = activeItem
+        ? `SLIDE ${currentFlatIdx + 1} / ${activeItem.slides.length}`
+        : 'SLIDE 0 / 0';
+
+      return (
+        <div className="flex flex-col h-screen overflow-hidden bg-black">
+          {/* ==================== TOP HEADER BAR ==================== */}
+          <header className="bg-slate-900/90 border-b border-slate-800 px-4 py-2.5 flex justify-between items-center select-none shrink-0">
+            <div className="flex items-center space-x-4">
+              <div className="flex items-center space-x-2">
+                <span className="w-2 h-2 rounded-full" style={{ background: ACCENT, boxShadow: `0 0 12px ${ACCENT}` }}></span>
+                <h1 className="font-black tracking-[0.25em] text-sm" style={{ color: ACCENT }}>WORSHIP CONSOLE</h1>
+              </div>
+              <span className="text-[10px] bg-slate-800 text-slate-400 px-2.5 py-1 rounded border border-slate-700 font-mono tracking-wider">
+                {slideCountLabel}
+              </span>
+              <span className={`text-[9px] font-bold px-2 py-1 rounded border ${
+                cloudStatus === 'ready'
+                  ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
+                  : cloudStatus === 'loading'
+                    ? 'text-amber-400 border-amber-500/30 bg-amber-500/10'
+                    : 'text-rose-400 border-rose-500/30 bg-rose-500/10'
+              }`}>
+                {cloudStatus === 'ready' ? '☁️ CLOUD SYNCED' : cloudStatus === 'loading' ? '☁️ SYNCING' : '☁️ OFFLINE'}
+              </span>
+            </div>
+
+            <div className="flex items-center space-x-3">
+              <button
+                onClick={() => setPasteOpen(true)}
+                className="px-4 py-1.5 text-[11px] rounded-md font-black uppercase tracking-wider transition border bg-slate-800 border-slate-700 hover:border-slate-600 text-slate-200 hover:bg-slate-700"
+              >
+                📋 PASTE YOUR LYRICS HERE
+              </button>
+
+              <button
+                onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                className="px-4 py-1.5 text-[11px] rounded-md font-black uppercase tracking-wider transition border bg-slate-800 border-slate-700 hover:border-slate-600 text-slate-200 hover:bg-slate-700"
+              >
+                🖼️ + ADD IMAGE
+              </button>
+
+              <button
+                onClick={openProfessionalWindow}
+                className="px-4 py-1.5 text-[11px] rounded-md font-black uppercase tracking-wider transition text-white flex items-center space-x-2"
+                style={{ background: ACCENT, boxShadow: `0 4px 20px ${ACCENT}40` }}
+              >
+                <span>{proWindowOpen && !proWindowOpen.closed ? '●' : '◻'}</span>
+                <span>OPEN PROFESSIONAL WINDOW</span>
+              </button>
+            </div>
+          </header>
+
+          {/* ==================== 4-COLUMN WORKFLOW ==================== */}
+          <div className="flex-1 flex overflow-hidden min-h-0">
+
+            {/* ---------- COL 1 : SIDEBAR — SEARCH + CLOUD + QUEUE ---------- */}
+            <aside className="w-80 bg-slate-900 border-r border-slate-800 flex flex-col select-none shrink-0">
+              {/* Search bar */}
+              <div className="px-3 pt-3 pb-2">
+                <div className="relative">
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 text-xs">🔍</span>
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search cloud library..."
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-8 pr-3 py-2 text-xs font-bold text-white focus:outline-none focus:border-indigo-500 placeholder:text-slate-500"
+                  />
+                </div>
+                <div className="flex items-center justify-between mt-2 px-1">
+                  <span className="text-[9px] font-black tracking-[0.2em] text-slate-500 uppercase">Cloud Library</span>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-[9px] text-slate-600 font-mono">{filteredCloud.length} songs</span>
+                    <button
+                      onClick={refreshCloud}
+                      className="text-[10px] text-slate-500 hover:text-indigo-400 font-bold transition"
+                      title="Refresh cloud library"
+                    >↻</button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Cloud library results */}
+              <div className="flex-1 overflow-y-auto px-2 space-y-1 min-h-0">
+                {cloudStatus === 'loading' && (
+                  <div className="text-center py-6 text-slate-600 text-[10px] font-bold uppercase tracking-wider">Loading cloud...</div>
+                )}
+                {cloudStatus === 'error' && (
+                  <div className="text-center py-6 text-rose-500/70 text-[10px] font-bold uppercase tracking-wider">Cloud unavailable</div>
+                )}
+                {cloudStatus === 'ready' && filteredCloud.length === 0 && (
+                  <div className="text-center py-6 text-slate-600 text-[10px] font-bold uppercase tracking-wider">
+                    {searchQuery.trim() ? 'No songs found' : 'Cloud library empty'}
+                  </div>
+                )}
+                {filteredCloud.map(song => (
+                  <div key={song.id} className="flex items-center justify-between px-2.5 py-2 rounded-lg bg-slate-800/40 border border-slate-800 hover:border-slate-700 transition group">
+                    <div className="min-w-0">
+                      <div className="flex items-center space-x-1.5">
+                        <span className="text-[8px] font-black px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 shrink-0">🎵 SONG</span>
+                        <span className="text-[11px] font-black text-slate-200 truncate">{song.title}</span>
+                      </div>
+                      <div className="text-[9px] text-slate-500 truncate ml-6">{song.groupName || '—'} · {song.slides?.length || 0} slides</div>
+                    </div>
+                    <div className="flex items-center space-x-1 shrink-0">
+                      <button
+                        onClick={() => addToQueue(song)}
+                        className="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 rounded text-[9px] font-black text-white transition"
+                      >
+                        + ADD
+                      </button>
+                      <button
+                        onClick={() => deleteFromCloud(song.id)}
+                        className="px-1.5 py-1 text-slate-500 hover:text-rose-400 rounded text-[10px] transition"
+                        title="Delete from library"
+                      >✕</button>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Image search results with badge */}
+                {imageStatus === 'error' && (
+                  <div className="text-center py-4 text-rose-500/70 text-[10px] font-bold uppercase tracking-wider">Images unavailable</div>
+                )}
+                {imageStatus === 'ready' && filteredImages.length === 0 && searchQuery.trim() && (
+                  <div className="text-center py-4 text-slate-600 text-[10px] font-bold uppercase tracking-wider">No images found</div>
+                )}
+                {filteredImages.map(img => (
+                  <div key={img.id} className="flex items-center justify-between px-2.5 py-2 rounded-lg bg-slate-800/40 border border-slate-800 hover:border-slate-700 transition group">
+                    <div className="min-w-0 flex items-center space-x-2">
+                      <img src={img.imageData} alt={img.title} className="w-8 h-8 rounded object-cover border border-slate-700 shrink-0" />
+                      <div className="min-w-0">
+                        <div className="flex items-center space-x-1.5">
+                          <span className="text-[8px] font-black px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 shrink-0">🖼️ IMAGE</span>
+                        </div>
+                        <div className="text-[10px] font-black text-slate-200 truncate">{img.title}</div>
+                        <div className="text-[9px] text-slate-500 truncate">{img.category}</div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => addImageToQueue(img)}
+                      className="ml-2 px-2 py-1 bg-emerald-600 hover:bg-emerald-500 rounded text-[9px] font-black text-white transition shrink-0"
+                    >
+                      + ADD
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              {/* Service queue */}
+              <div className="px-3 pt-2 pb-1 border-t border-slate-800">
+                <span className="text-[9px] font-black tracking-[0.2em] text-slate-500 uppercase">Service Queue ({serviceQueue.length})</span>
+              </div>
+              <div className="flex-1 overflow-y-auto px-2 space-y-1 pb-2 min-h-0">
+                {serviceQueue.length === 0 && (
+                  <div className="text-center py-4 text-slate-600 text-[10px] font-bold uppercase tracking-wider">Queue is empty</div>
+                )}
+                {serviceQueue.map((item, idx) => (
+                  <div
+                    key={item.id}
+                    onClick={() => { setActiveItemId(item.id); setActiveSectionIdx(0); setActiveSlideIdx(0); }}
+                    className={`p-2 rounded-lg cursor-pointer border transition ${
+                      item.id === activeItemId
+                        ? 'bg-indigo-950/60 border-indigo-500/60'
+                        : 'bg-slate-800/40 border-transparent hover:bg-slate-800'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className={`text-[10px] font-black truncate ${item.id === activeItemId ? 'text-white' : 'text-slate-300'}`}>
+                        {idx + 1}. {item.title}
+                      </span>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); removeFromQueue(item.id); }}
+                        className="ml-1 text-slate-600 hover:text-rose-400 text-xs shrink-0"
+                        title="Remove from queue"
+                      >🗑️</button>
+                    </div>
+                    {/* Inline rename: Song Title */}
+                    <input
+                      type="text"
+                      value={item.title}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => renameQueueItem(item.id, 'title', e.target.value.toUpperCase())}
+                      className="mt-1 w-full bg-slate-900/60 border border-slate-700/60 rounded px-1.5 py-0.5 text-[10px] font-bold text-slate-200 focus:outline-none focus:border-indigo-500"
+                      placeholder="Song Title"
+                    />
+                    {/* Inline rename: Singer / Group Name */}
+                    <input
+                      type="text"
+                      value={item.groupName || ''}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => renameQueueItem(item.id, 'groupName', e.target.value)}
+                      className="mt-1 w-full bg-slate-900/60 border border-slate-700/60 rounded px-1.5 py-0.5 text-[9px] text-slate-400 focus:outline-none focus:border-indigo-500"
+                      placeholder="Singer / Group Name"
+                    />
+                    <div className="mt-1 text-[9px] text-slate-500 truncate">{item.type} · {item.slides?.length || 0} slides</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Action Buttons pinned bottom */}
+              <div className="pt-2 pb-3 px-3 border-t border-slate-800 space-y-2">
+                <button
+                  onClick={() => setPasteOpen(true)}
+                  className="w-full py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-[10px] font-black tracking-wider uppercase text-slate-200 border border-slate-700 transition flex items-center justify-center space-x-1.5"
+                >
+                  <span className="text-indigo-400 text-sm font-bold leading-none">+</span><span>Add Song</span>
+                </button>
+                <button
+                  onClick={addInfoItem}
+                  className="w-full py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-[10px] font-black tracking-wider uppercase text-slate-200 border border-slate-700 transition flex items-center justify-center space-x-1.5"
+                >
+                  <span className="text-indigo-400 text-sm font-bold leading-none">+</span><span>Add Info</span>
+                </button>
+              </div>
+            </aside>
+
+            {/* ---------- COL 2 : SERVICE ITEM LIST ---------- */}
+            <div className="w-72 bg-slate-950 border-r border-slate-800 flex flex-col select-none shrink-0">
+              <div className="px-4 pt-3 pb-2 flex justify-between items-center">
+                <span className="text-[9px] font-black tracking-[0.2em] text-slate-500 uppercase">Service Items</span>
+                <span className="text-[9px] text-indigo-400 font-bold">{serviceQueue.length}</span>
+              </div>
+
+              <div className="flex-1 overflow-y-auto px-3 space-y-2 pb-3">
+                {serviceQueue.length === 0 && (
+                  <div className="text-center py-16 text-slate-600 text-[10px] font-bold uppercase tracking-wider leading-relaxed">
+                    Queue is empty<br/>Search cloud or paste lyrics
+                  </div>
+                )}
+                {serviceQueue.map((item, idx) => {
+                  const isActive = item.id === activeItemId;
+                  return (
+                    <div
+                      key={item.id}
+                      onClick={() => { setActiveItemId(item.id); setActiveSectionIdx(0); setActiveSlideIdx(0); }}
+                      className={`p-3 rounded-xl border cursor-pointer transition ${
+                        isActive
+                          ? 'bg-indigo-950/70 border-indigo-500 shadow-lg shadow-indigo-900/30'
+                          : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex justify-between items-start">
+                        <span className={`text-[9px] font-black tracking-widest uppercase ${isActive ? 'text-indigo-400' : 'text-slate-500'}`}>
+                          {item.type}
+                        </span>
+                        <div className="flex items-center space-x-1.5">
+                          <span className={`text-[9px] font-mono ${isActive ? 'text-indigo-300' : 'text-slate-600'}`}>{item.slides.length} sl</span>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); removeFromQueue(item.id); }}
+                            className="text-slate-600 hover:text-rose-400 text-xs font-bold transition"
+                            title="Remove from service"
+                          >✕</button>
+                        </div>
+                      </div>
+                      <div className={`mt-1 text-xs font-black tracking-wide ${isActive ? 'text-white' : 'text-slate-300'}`}>
+                        {idx + 1}. {item.title}
+                      </div>
+                      <div className={`mt-1 text-[10px] truncate ${isActive ? 'text-indigo-200/70' : 'text-slate-500'}`}>
+                        <span className="mr-1">🔍</span>{item.preview}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* ---------- COL 3 : SECTION-GROUPED SLIDE GRID ---------- */}
+            <main className="flex-1 bg-slate-950 min-w-0 flex flex-col">
+              <div className="flex-1 flex overflow-hidden min-h-0">
+                {/* Section grid */}
+                <div className="flex-1 overflow-y-auto px-4 py-4">
+                  {!activeItem ? (
+                    <div className="h-full flex flex-col items-center justify-center text-center py-24">
+                      <div className="text-4xl mb-3 opacity-30">🎵</div>
+                      <div className="text-slate-500 text-xs font-black tracking-widest uppercase">No item selected</div>
+                      <div className="text-slate-600 text-[10px] mt-1">Search the cloud library or paste lyrics to begin</div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between mb-3 px-1">
+                        <div>
+                          <span className="text-[9px] font-black tracking-[0.2em] text-slate-500 uppercase">Slide Deck</span>
+                          <h2 className="text-sm font-black tracking-wide text-white mt-0.5">{activeItem.title}</h2>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <span className="text-[9px] text-slate-500 font-mono">Section-based view</span>
+                          <button
+                            onClick={saveEditsToCloud}
+                            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition text-white ${
+                              saveStatus === 'saving' ? 'opacity-60' : 'hover:opacity-90'
+                            }`}
+                            style={{ background: ACCENT, boxShadow: `0 4px 20px ${ACCENT}40` }}
+                          >
+                            {saveStatus === 'saving' ? '💾 Saving...' : saveStatus === 'saved' ? '✅ Saved!' : saveStatus === 'error' ? '⚠️ Failed' : '💾 Save Changes to Cloud'}
+                          </button>
+                        </div>
+                      </div>
+
+                      {groupedSlides.length === 0 && (
+                        <div className="text-center py-16 text-slate-500 text-xs font-bold tracking-wider uppercase">
+                          No slides available
+                        </div>
+                      )}
+
+                      <div className="space-y-5">
+                        {groupedSlides.map((group, sectionIdx) => (
+                          <div key={group.tag}>
+                            <div className="flex items-center space-x-2 mb-2 px-1">
+                              <span className="text-[9px] font-black tracking-[0.2em] px-2 py-1 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                                {group.tag}
+                              </span>
+                              <span className="h-px flex-1 bg-slate-800"></span>
+                              <span className="text-[9px] text-slate-600 font-mono">{group.slides.length}</span>
+                              <button
+                                onClick={() => addSlideToSection(group.tag)}
+                                className="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded text-[9px] font-black text-slate-300 border border-slate-700 transition"
+                                title={`Add slide to ${group.tag}`}
+                              >
+                                + Add Slide
+                              </button>
+                            </div>
+
+                            <div className="grid grid-cols-2 xl:grid-cols-3 gap-2.5">
+                              {group.slides.map((slide, slideIdx) => {
+                                // Composite check — ONLY the exact section+slide card is LIVE
+                                const isLive = sectionIdx === activeSectionIdx && slideIdx === activeSlideIdx;
+                                return (
+                                  <div
+                                    key={slide.id}
+                                    onClick={() => {
+                                      setActiveSectionIdx(sectionIdx);
+                                      setActiveSlideIdx(slideIdx);
+                                    }}
+                                    className={`group text-left p-3 rounded-xl border transition relative flex flex-col ${
+                                      isLive
+                                        ? 'bg-indigo-600 border-indigo-400 text-white shadow-lg shadow-indigo-600/30'
+                                        : 'bg-slate-900 border-slate-800 hover:border-indigo-500/40 hover:bg-slate-900/80 text-slate-300'
+                                    }`}
+                                  >
+                                    <div className="flex justify-between items-center mb-1.5">
+                                      <span className={`text-[8px] font-black tracking-widest px-1.5 py-0.5 rounded ${isLive ? 'bg-indigo-800' : 'bg-slate-800 text-indigo-400'}`}>
+                                        SLIDE {slideIdx + 1}
+                                      </span>
+                                      <div className="flex items-center space-x-1.5">
+                                        {isLive && <span className="text-[8px] font-bold">● LIVE</span>}
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); deleteSlide(slide.id); }}
+                                          className="text-slate-500 hover:text-rose-400 text-xs font-bold transition"
+                                          title="Delete slide"
+                                        >✕</button>
+                                      </div>
+                                    </div>
+
+                                    {/* Editable textarea for manual lyric editing */}
+                                    <textarea
+                                      rows="2"
+                                      value={slide.content}
+                                      onClick={(e) => e.stopPropagation()}
+                                      onChange={(e) => updateSlideContent(slide.id, e.target.value)}
+                                      className={`w-full bg-transparent text-[11px] font-black leading-snug uppercase tracking-wide resize-none focus:outline-none focus:ring-1 focus:ring-indigo-400 rounded p-1 ${
+                                        isLive ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'
+                                      }`}
+                                    />
+
+                                    <span className="text-[8px] font-mono opacity-40 flex items-center space-x-1 self-end mt-1">
+                                      <span>{slide.wordCount}w</span>
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Bottom-right SAVE button */}
+                      <div className="flex justify-end pt-4 pb-1">
+                        <button
+                          onClick={saveEditsToCloud}
+                          className={`px-5 py-2.5 rounded-lg text-[11px] font-black uppercase tracking-wider transition text-white ${
+                            saveStatus === 'saving' ? 'opacity-60' : 'hover:opacity-90'
+                          }`}
+                          style={{ background: ACCENT, boxShadow: `0 4px 20px ${ACCENT}40` }}
+                        >
+                          {saveStatus === 'saving' ? '💾 Saving...' : saveStatus === 'saved' ? '✅ Saved!' : saveStatus === 'error' ? '⚠️ Failed' : '💾 SAVE'}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* ---------- COL 4 : LIVE STAGE MONITOR ---------- */}
+                <div className="w-80 bg-slate-900 border-l border-slate-800 flex flex-col select-none shrink-0">
+                  <div className="px-4 pt-3 pb-2 border-b border-slate-800/60">
+                    <span className="text-[9px] font-black tracking-[0.2em] text-slate-500 uppercase">Live Stage Preview</span>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                    {/* Monitor preview box */}
+                    <div className="aspect-video w-full bg-black rounded-xl border border-slate-700/80 flex flex-col justify-center items-center px-3 text-center overflow-hidden relative">
+                      <div className="absolute inset-0 opacity-[0.05]" style={{backgroundImage:'radial-gradient(circle at 50% 50%, #6366F1 0%, transparent 70%)'}}></div>
+                      {currentSlide ? (
+                        <>
+                          {currentDisplayTitle && (
+                            <span className="text-[8px] text-amber-500 font-bold tracking-[0.15em] uppercase mb-1.5 opacity-80 relative z-10">
+                              {currentDisplayTitle}
+                            </span>
+                          )}
+                          <p className="text-[11px] font-black leading-tight whitespace-pre-line text-white uppercase relative z-10 max-h-full overflow-hidden">
+                            {currentSlide.content}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-[10px] text-slate-600 font-bold uppercase tracking-widest relative z-10">No Slide Selected</p>
+                      )}
+                    </div>
+
+                    {/* Prev / Next controls */}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setSelectionFromFlat(Math.max(currentFlatIdx - 1, 0))}
+                        disabled={!activeItem || currentFlatIdx === 0}
+                        className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-slate-800 rounded-lg font-bold text-[11px] transition border border-slate-700"
+                      >
+                        ◀ PREVIOUS
+                      </button>
+                      <button
+                        onClick={() => setSelectionFromFlat(Math.min(currentFlatIdx + 1, (activeItem?.slides.length || 1) - 1))}
+                        disabled={!activeItem || currentFlatIdx >= (activeItem?.slides.length || 1) - 1}
+                        className="flex-1 py-2.5 rounded-lg font-bold text-[11px] transition text-white border disabled:opacity-30"
+                        style={{ background: ACCENT, borderColor: ACCENT }}
+                      >
+                        NEXT ▶
+                      </button>
+                    </div>
+
+                    {/* Hotkey tips */}
+                    <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 space-y-2">
+                      <div className="text-[9px] font-black tracking-[0.2em] text-slate-500 uppercase">Hotkeys</div>
+                      <div className="flex items-center justify-between text-[10px] text-slate-400">
+                        <span className="flex items-center space-x-1.5">
+                          <kbd className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-[9px] text-white font-bold">Ctrl</kbd>
+                          <span>/</span>
+                          <kbd className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-[9px] text-white font-bold">◀</kbd>
+                        </span>
+                        <span className="font-mono">Left Slide</span>
+                      </div>
+                      <div className="flex items-center justify-between text-[10px] text-slate-400">
+                        <span className="flex items-center space-x-1.5">
+                          <kbd className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-[9px] text-white font-bold">Space</kbd>
+                          <span>or</span>
+                          <kbd className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-[9px] text-white font-bold">▶</kbd>
+                        </span>
+                        <span className="font-mono">Right Slide</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Professional window launcher at bottom of col 4 */}
+                  <div className="p-4 border-t border-slate-800">
+                    <button
+                      onClick={openProfessionalWindow}
+                      className="w-full py-2.5 rounded-lg text-[10px] font-black tracking-widest uppercase text-white transition flex items-center justify-center space-x-2"
+                      style={{ background: ACCENT, boxShadow: `0 4px 20px ${ACCENT}40` }}
+                    >
+                      <span>🖥️</span>
+                      <span>Open Professional Window</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </main>
+          </div>
+
+          {/* ==================== HIDDEN FILE INPUT + PASTE MODAL ==================== */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+            onChange={handleImageFile}
+            className="hidden"
+          />
+          {pasteOpen && (
+            <PasteLyricsModal
+              onClose={() => setPasteOpen(false)}
+              onSubmit={addSongFromLyrics}
+            />
+          )}
+        </div>
+      );
+    }
+
+    // ============================================================
+    //  PASTE LYRICS MODAL
+    // ============================================================
+    function PasteLyricsModal({ onClose, onSubmit }) {
+      const [title, setTitle] = useState('');
+      const [groupName, setGroupName] = useState('');
+      const [rawText, setRawText] = useState('');
+
+      const handleSubmit = () => {
+        if (!rawText.trim()) return;
+        onSubmit(title, rawText, groupName);
+      };
+
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-6">
+          <div className="w-full max-w-2xl bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl shadow-indigo-900/30 overflow-hidden">
+            {/* Modal header */}
+            <div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center">
+              <div>
+                <h2 className="text-sm font-black tracking-widest text-white uppercase">Paste Your Lyrics Here</h2>
+                <p className="text-[10px] text-slate-500 mt-0.5">Auto-splits into slides · max 5 words per slide · saved to cloud</p>
+              </div>
+              <button
+                onClick={onClose}
+                className="text-slate-500 hover:text-white text-lg font-bold transition"
+              >✕</button>
+            </div>
+
+            {/* Modal body */}
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-black tracking-widest text-slate-400 uppercase block mb-1.5">Song Title <span className="text-slate-600 normal-case font-normal">(blank = first line)</span></label>
+                  <input
+                    type="text"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder="e.g. Way Maker"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2.5 text-sm font-bold text-white focus:outline-none focus:border-indigo-500 placeholder:text-slate-600"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black tracking-widest text-slate-400 uppercase block mb-1.5">Group / Singer Name</label>
+                  <input
+                    type="text"
+                    value={groupName}
+                    onChange={(e) => setGroupName(e.target.value)}
+                    placeholder="e.g. Worship Team"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2.5 text-sm font-bold text-white focus:outline-none focus:border-indigo-500 placeholder:text-slate-600"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black tracking-widest text-slate-400 uppercase block mb-1.5">Raw Lyrics</label>
+                <textarea
+                  rows="10"
+                  value={rawText}
+                  onChange={(e) => setRawText(e.target.value)}
+                  placeholder={'[Verse 1]\nYou are here moving in our midst\n\n[Chorus]\nWay maker miracle worker promise keeper'}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2.5 text-sm font-mono text-slate-200 focus:outline-none focus:border-indigo-500 placeholder:text-slate-600 resize-none"
+                />
+                <p className="text-[10px] text-slate-500 mt-1.5">
+                  💡 Use <code className="text-indigo-400">[Verse 1]</code>, <code className="text-indigo-400">[Chorus]</code>, <code className="text-indigo-400">[Bridge]</code> etc. to mark sections. Short lines stay on 1 slide; long lines wrap at 5 words.
+                </p>
+              </div>
+            </div>
+
+            {/* Modal footer */}
+            <div className="px-6 py-4 border-t border-slate-800 flex justify-end gap-3">
+              <button
+                onClick={onClose}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-[11px] font-black uppercase text-slate-300 border border-slate-700 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmit}
+                className="px-5 py-2 rounded-lg text-[11px] font-black uppercase text-white transition"
+                style={{ background: ACCENT, boxShadow: `0 4px 20px ${ACCENT}40` }}
+              >
+                Create Song
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================================
+    //  ROOT APP — route based on URL mode
+    // ============================================================
+    function App() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('mode') === 'projector') return <ProjectorStage />;
+      return <PresenterConsole />;
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
