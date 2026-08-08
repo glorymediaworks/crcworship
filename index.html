@@ -19,6 +19,50 @@
     ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
     ::-webkit-scrollbar-thumb:hover { background: #475569; }
     kbd { box-shadow: 0 -1px 0 0 rgba(148,163,184,.3) inset; }
+
+    /* ===== Slide transition animations (300ms–500ms) ===== */
+    .trans-none { animation: transNone 0ms ease-in-out; }
+    .trans-fade { animation: transFade 400ms ease-in-out; }
+    .trans-fade-black { animation: transFadeBlack 500ms ease-in-out; }
+    .trans-slide-left { animation: transSlideLeft 400ms ease-in-out; }
+    .trans-slide-right { animation: transSlideRight 400ms ease-in-out; }
+    .trans-slide-up { animation: transSlideUp 400ms ease-in-out; }
+    .trans-zoom { animation: transZoom 400ms ease-in-out; }
+    .trans-blur { animation: transBlur 500ms ease-in-out; }
+
+    @keyframes transNone {
+      from { opacity: 1; }
+      to { opacity: 1; }
+    }
+    @keyframes transFade {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes transFadeBlack {
+      0% { opacity: 0; }
+      50% { opacity: 0; }
+      100% { opacity: 1; }
+    }
+    @keyframes transSlideLeft {
+      from { opacity: 0; transform: translateX(100%); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes transSlideRight {
+      from { opacity: 0; transform: translateX(-100%); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes transSlideUp {
+      from { opacity: 0; transform: translateY(100%); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes transZoom {
+      from { opacity: 0; transform: scale(0.8); }
+      to { opacity: 1; transform: scale(1); }
+    }
+    @keyframes transBlur {
+      from { opacity: 0; filter: blur(12px); }
+      to { opacity: 1; filter: blur(0); }
+    }
   </style>
 </head>
 <body class="bg-slate-950 text-slate-100 font-sans min-h-screen selection:bg-indigo-500 selection:text-white overflow-hidden">
@@ -35,30 +79,59 @@
     const IMAGE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbxb3wysS_kPuPLalOBO2zNBpd8DieoPqIUppy0iJfw6iyrJDQ7x4SEvytyuKYLK1AZL0A/exec';
 
     // ============================================================
-    //  SECTION-BASED LYRIC PARSER
-    //  - Respect natural line breaks first (short lines stay on 1 slide)
-    //  - If a line exceeds 5 words, wrap into 5-word micro-slides
-    //  - Any [...] header switches the section
+    //  LINE-BASED LYRIC PARSER (COMMA BREAK + 5-WORD LIMIT)
+    //  - Each individual song line forms a slide, formatted into
+    //    neat 1–3 line blocks on screen.
+    //  - COMMA SPLITTING: if a line contains a comma between words
+    //    (not at the very end), split at the comma so the second
+    //    part appears on Line 2 of the same slide.
+    //  - 5-WORD LIMIT: if a phrase/line exceeds 5 words (and has no
+    //    comma break), wrap into new lines after every 4–5 words so
+    //    no line on the slide exceeds 5 words.
+    //  - Section tags like [Verse 1], [Chorus], [Bridge] switch the
+    //    section but are NOT emitted as standalone slides.
     //  - Returns { slides, sectionsJson }
     // ============================================================
     function parseLyricsToSlides(itemId, rawText) {
-      const MAX_WORDS = 5;
       const slides = [];
       const sectionsJson = [];
       let currentTag = 'VERSE 1';
       let currentSectionSlides = [];
-      const lines = rawText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
+      // Format a raw lyric line into a multi-line block (1–3 lines).
+      const formatLine = (raw) => {
+        const text = raw.replace(/\s+$/g, '').trim();
+        if (!text) return '';
+        const lines = [];
+
+        // COMMA SPLITTING: split at commas that are between words (not trailing)
+        const commaParts = text.split(/(?<=[^,\s])\s*,\s*(?=[^,\s])/).map(p => p.trim()).filter(Boolean);
+
+        for (const part of commaParts) {
+          const words = part.split(/\s+/).filter(Boolean);
+          if (words.length <= 5) {
+            lines.push(words.join(' '));
+          } else {
+            // 5-WORD LIMIT: wrap into chunks of 4–5 words
+            for (let i = 0; i < words.length; i += 5) {
+              lines.push(words.slice(i, i + 5).join(' '));
+            }
+          }
+        }
+        return lines.join('\n');
+      };
 
       const pushSlide = (tag, content) => {
-        if (!content) return;
+        const cleaned = formatLine(content);
+        if (!cleaned) return;
         slides.push({
           id: `${itemId}-slide-${slides.length}`,
           itemId,
           tag,
-          content,
-          wordCount: content.split(/\s+/).filter(Boolean).length
+          content: cleaned,
+          wordCount: cleaned.split(/\s+/).filter(Boolean).length
         });
-        currentSectionSlides.push(content);
+        currentSectionSlides.push(cleaned);
       };
 
       const flushSection = () => {
@@ -68,37 +141,23 @@
         currentSectionSlides = [];
       };
 
+      const lines = rawText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
       for (const line of lines) {
-        // ANY text in brackets = section header (standalone OR inline with lyrics)
+        // Section header — switch the section tag, do NOT emit a standalone slide
         const headerMatch = line.match(/^\[([^\]]+)\]\s*(.*)$/);
         if (headerMatch) {
           flushSection();
           currentTag = headerMatch[1].trim().toUpperCase() || 'VERSE 1';
           const rest = headerMatch[2].trim();
           if (rest) {
-            // Respect line break: this inline line is one slide if ≤5 words, else wrap
-            const words = rest.split(/\s+/).filter(Boolean);
-            if (words.length <= MAX_WORDS) {
-              pushSlide(currentTag, words.join(' '));
-            } else {
-              for (let i = 0; i < words.length; i += MAX_WORDS) {
-                pushSlide(currentTag, words.slice(i, i + MAX_WORDS).join(' '));
-              }
-            }
+            // Inline text after a header becomes its own slide
+            pushSlide(currentTag, rest);
           }
           continue;
         }
-        // Regular lyric line — respect line break first
-        const words = line.split(/\s+/).filter(Boolean);
-        if (words.length <= MAX_WORDS) {
-          // Short line stays on 1 slide
-          pushSlide(currentTag, words.join(' '));
-        } else {
-          // Long line wraps into 5-word micro-slides
-          for (let i = 0; i < words.length; i += MAX_WORDS) {
-            pushSlide(currentTag, words.slice(i, i + MAX_WORDS).join(' '));
-          }
-        }
+        // Each single line of lyrics = one slide (formatted into 1–3 lines)
+        pushSlide(currentTag, line);
       }
       flushSection();
 
@@ -299,30 +358,16 @@
 
     // ============================================================
     //  PROJECTOR SCREEN (dual-screen output) — WHITE HUD
-    //  ⚠️ UNTOUCHED — do not modify
     // ============================================================
     function ProjectorStage() {
       const [slide, setSlide] = useState({ title: 'CRC CHURCH WORSHIP', content: 'GREETINGS', songTitle: '', groupName: '' });
       const [image, setImage] = useState(null);
-      const [fading, setFading] = useState(false);
+      const [transition, setTransition] = useState('fade');
+      // animationKey forces the CSS animation to restart on every content change
+      const [animationKey, setAnimationKey] = useState(0);
 
-      // Fade out, swap content, fade back in (300ms)
-      const applyContent = (type, data) => {
-        setFading(true);
-        setTimeout(() => {
-          if (type === 'IMAGE') {
-            setImage(data);
-            setSlide(null);
-          } else {
-            setImage(null);
-            setSlide(data);
-          }
-          setFading(false);
-        }, 300);
-      };
-
+      // Hydrate from saved last state
       useEffect(() => {
-        // Hydrate from saved last state
         try {
           const saved = localStorage.getItem('worship_console_last_slide');
           if (saved) {
@@ -330,6 +375,8 @@
             if (s.imageData) { setImage({ imageData: s.imageData, title: s.title || '' }); }
             else setSlide(s);
           }
+          const savedT = localStorage.getItem('worship_console_transition');
+          if (savedT) setTransition(savedT);
         } catch (e) {}
 
         // BroadcastChannel — realtime sync from control console
@@ -342,10 +389,29 @@
           } else if (e.data.type === 'IMAGE_CHANGE') {
             applyContent('IMAGE', e.data.payload);
             try { localStorage.setItem('worship_console_last_slide', JSON.stringify({ ...e.data.payload, imageData: e.data.payload.imageData })); } catch (err) {}
+          } else if (e.data.type === 'TRANSITION_CHANGE') {
+            setTransition(e.data.transition);
+            try { localStorage.setItem('worship_console_transition', e.data.transition); } catch (err) {}
           }
         };
         return () => channel.close();
       }, []);
+
+      // Apply an animation class based on the current transition + restart animation
+      const transitionClass = `trans-${transition || 'fade'}`;
+
+      // Fade out, swap content, apply transition animation (300ms–500ms)
+      const applyContent = (type, data) => {
+        setAnimationKey(k => k + 1);
+        if (type === 'IMAGE') {
+          setImage(data);
+          // Keep a safe fallback slide so the HUD footer never reads null
+          setSlide({ title: data?.title || '', content: '', songTitle: '', groupName: '' });
+        } else {
+          setImage(null);
+          setSlide(data);
+        }
+      };
 
       return (
         <div className="w-screen h-screen bg-white flex flex-col select-none overflow-hidden no-scrollbar relative">
@@ -353,17 +419,18 @@
           {image ? (
             <div className="flex-1 relative overflow-hidden">
               <img
+                key={animationKey}
                 src={image.imageData}
                 alt={image.title || 'Image'}
-                className="absolute inset-0 w-full h-full object-contain"
-                style={{ transition: 'opacity 300ms ease-in-out', opacity: fading ? 0 : 1 }}
+                className={`absolute inset-0 w-full h-full object-contain ${transitionClass}`}
               />
             </div>
           ) : (
             <div className="flex-1 flex flex-col justify-center items-center px-16 text-center">
               <p
-                className="text-5xl md:text-7xl lg:text-8xl font-black tracking-wide leading-[1.15] whitespace-pre-line text-black uppercase max-w-6xl"
-                style={{ transition: 'opacity 300ms ease-in-out', opacity: fading ? 0 : 1 }}
+                key={animationKey}
+                className={`font-black tracking-wide leading-[1.4] whitespace-pre-wrap text-black uppercase max-w-6xl ${transitionClass}`}
+                style={{ fontSize: 'clamp(2rem, 6vw, 6rem)' }}
               >
                 {slide?.content}
               </p>
@@ -373,13 +440,13 @@
           {/* HUD Footer — clean, minimal, small subtle black text */}
           <div className="absolute bottom-0 inset-x-0 px-8 py-4 flex justify-between items-end select-none">
             <span className="text-xs md:text-sm font-medium text-black/60 uppercase tracking-wide">
-              {slide.songTitle || slide.title || ''}
+              {slide?.songTitle || slide?.title || ''}
             </span>
             <span className="text-xs md:text-sm font-medium text-black/60 uppercase tracking-wide">
               CRC Coimbatore
             </span>
             <span className="text-xs md:text-sm font-medium text-black/60 uppercase tracking-wide">
-              {slide.groupName || ''}
+              {slide?.groupName || ''}
             </span>
           </div>
         </div>
@@ -407,6 +474,7 @@
       const [cloudImages, setCloudImages] = useState([]);
       const [imageStatus, setImageStatus] = useState('loading');
       const [imageUploading, setImageUploading] = useState(false);
+      const [transition, setTransition] = useState('fade');
       const fileInputRef = React.createRef();
 
       // Fetch cloud library from Google Sheets on mount
@@ -506,22 +574,30 @@
         try { localStorage.setItem('worship_console_last_slide', JSON.stringify(payload)); } catch (e) {}
       }, [currentSlide, activeItem, currentDisplayTitle]);
 
-      // Keyboard navigation — advances sequentially across section boundaries.
+      // Broadcast the selected transition to the display window + persist.
+      useEffect(() => {
+        const channel = new BroadcastChannel('worship-console-sync');
+        channel.postMessage({ type: 'TRANSITION_CHANGE', transition });
+        channel.close();
+        try { localStorage.setItem('worship_console_transition', transition); } catch (e) {}
+      }, [transition]);
+
+      // Keyboard navigation — single-key hotkeys (no Ctrl/Alt modifiers).
+      // Left Arrow -> Previous, Right Arrow -> Next.
+      // Ignored while typing in an input or textarea.
       useEffect(() => {
         const handler = (e) => {
+          if (e.ctrlKey || e.altKey || e.metaKey) return;
           if (pasteOpen) return;
           const t = e.target;
           if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
-          if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter') {
-            e.preventDefault();
-            if (activeItem && activeItem.slides.length > 0) {
-              setSelectionFromFlat(Math.min(currentFlatIdx + 1, activeItem.slides.length - 1));
-            }
-          } else if (e.key === 'ArrowLeft' || e.key === 'Backspace') {
-            e.preventDefault();
-            if (activeItem && activeItem.slides.length > 0) {
-              setSelectionFromFlat(Math.max(currentFlatIdx - 1, 0));
-            }
+          if ((e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+          e.preventDefault();
+          if (!activeItem || activeItem.slides.length === 0) return;
+          if (e.key === 'ArrowRight') {
+            setSelectionFromFlat(Math.min(currentFlatIdx + 1, activeItem.slides.length - 1));
+          } else {
+            setSelectionFromFlat(Math.max(currentFlatIdx - 1, 0));
           }
         };
         window.addEventListener('keydown', handler);
@@ -1189,25 +1265,23 @@
                       </button>
                     </div>
 
-                    {/* Hotkey tips */}
+                    {/* Transition Selection */}
                     <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 space-y-2">
-                      <div className="text-[9px] font-black tracking-[0.2em] text-slate-500 uppercase">Hotkeys</div>
-                      <div className="flex items-center justify-between text-[10px] text-slate-400">
-                        <span className="flex items-center space-x-1.5">
-                          <kbd className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-[9px] text-white font-bold">Ctrl</kbd>
-                          <span>/</span>
-                          <kbd className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-[9px] text-white font-bold">◀</kbd>
-                        </span>
-                        <span className="font-mono">Left Slide</span>
-                      </div>
-                      <div className="flex items-center justify-between text-[10px] text-slate-400">
-                        <span className="flex items-center space-x-1.5">
-                          <kbd className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-[9px] text-white font-bold">Space</kbd>
-                          <span>or</span>
-                          <kbd className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-[9px] text-white font-bold">▶</kbd>
-                        </span>
-                        <span className="font-mono">Right Slide</span>
-                      </div>
+                      <div className="text-[9px] font-black tracking-[0.2em] text-slate-500 uppercase">Transition</div>
+                      <select
+                        value={transition}
+                        onChange={(e) => setTransition(e.target.value)}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-[11px] font-bold text-white focus:outline-none focus:border-indigo-500"
+                      >
+                        <option value="none">None (Instant)</option>
+                        <option value="fade">Fade / Crossfade (Default)</option>
+                        <option value="fade-black">Fade to Black</option>
+                        <option value="slide-left">Slide Left</option>
+                        <option value="slide-right">Slide Right</option>
+                        <option value="slide-up">Slide Up</option>
+                        <option value="zoom">Zoom In / Scale</option>
+                        <option value="blur">Blur Fade</option>
+                      </select>
                     </div>
                   </div>
 
@@ -1265,7 +1339,7 @@
             <div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center">
               <div>
                 <h2 className="text-sm font-black tracking-widest text-white uppercase">Paste Your Lyrics Here</h2>
-                <p className="text-[10px] text-slate-500 mt-0.5">Auto-splits into slides · max 5 words per slide · saved to cloud</p>
+                <p className="text-[10px] text-slate-500 mt-0.5">Auto-splits into slides · one line per slide · saved to cloud</p>
               </div>
               <button
                 onClick={onClose}
@@ -1308,7 +1382,7 @@
                   className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2.5 text-sm font-mono text-slate-200 focus:outline-none focus:border-indigo-500 placeholder:text-slate-600 resize-none"
                 />
                 <p className="text-[10px] text-slate-500 mt-1.5">
-                  💡 Use <code className="text-indigo-400">[Verse 1]</code>, <code className="text-indigo-400">[Chorus]</code>, <code className="text-indigo-400">[Bridge]</code> etc. to mark sections. Short lines stay on 1 slide; long lines wrap at 5 words.
+                  💡 Use <code className="text-indigo-400">[Verse 1]</code>, <code className="text-indigo-400">[Chorus]</code>, <code className="text-indigo-400">[Bridge]</code> etc. to mark sections. Each line of lyrics becomes its own slide.
                 </p>
               </div>
             </div>
