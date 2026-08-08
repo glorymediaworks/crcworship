@@ -79,32 +79,49 @@
     const IMAGE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbxb3wysS_kPuPLalOBO2zNBpd8DieoPqIUppy0iJfw6iyrJDQ7x4SEvytyuKYLK1AZL0A/exec';
 
     // ============================================================
-    //  LINE-BASED LYRIC PARSER (COMMA BREAK + 5-WORD LIMIT)
-    //  - Each individual song line forms a slide, formatted into
-    //    neat 1–3 line blocks on screen.
-    //  - COMMA SPLITTING: if a line contains a comma between words
-    //    (not at the very end), split at the comma so the second
-    //    part appears on Line 2 of the same slide.
-    //  - 5-WORD LIMIT: if a phrase/line exceeds 5 words (and has no
-    //    comma break), wrap into new lines after every 4–5 words so
-    //    no line on the slide exceeds 5 words.
+    //  LINE-BASED LYRIC PARSER (PAIRED LINES + COMMA BREAK + 5-WORD LIMIT)
     //  - Section tags like [Verse 1], [Chorus], [Bridge] switch the
     //    section but are NOT emitted as standalone slides.
+    //  - PAIRED LINES: consecutive lyric lines are grouped 2-at-a-time
+    //    so that 2 lines form ONE slide unit.
+    //    Example: Line 1 "God of Jacob," + Line 2 "Great I Am" → 1 slide.
+    //  - COMMA SPLITTING: if a line contains a mid-sentence comma
+    //    (not at the very end), force a line break at the comma
+    //    within that slide.
+    //  - 5-WORD LIMIT: phrases longer than 5 words wrap into a neat
+    //    2nd/3rd line so no line on the slide exceeds 5 words.
     //  - Returns { slides, sectionsJson }
     // ============================================================
     function parseLyricsToSlides(itemId, rawText) {
       const slides = [];
       const sectionsJson = [];
       let currentTag = 'VERSE 1';
+      let currentSectionPlainLines = [];
       let currentSectionSlides = [];
 
-      // Format a raw lyric line into a multi-line block (1–3 lines).
+      // Split an array of words into balanced chunks of max 5 words.
+      const chunkText = (words) => {
+        const nChunks = Math.max(Math.ceil(words.length / 5), 1);
+        const base = Math.floor(words.length / nChunks);
+        let extra = words.length % nChunks;
+        const chunks = [];
+        let i = 0;
+        for (let c = 0; c < nChunks; c++) {
+          const size = base + (extra > 0 ? 1 : 0);
+          if (extra > 0) extra--;
+          chunks.push(words.slice(i, i + size).join(' '));
+          i += size;
+        }
+        return chunks;
+      };
+
+      // Format a single raw lyric line into display lines (1–3 lines).
       const formatLine = (raw) => {
         const text = raw.replace(/\s+$/g, '').trim();
-        if (!text) return '';
+        if (!text) return [];
         const lines = [];
 
-        // COMMA SPLITTING: split at commas that are between words (not trailing)
+        // COMMA SPLITTING: split at commas between words (not trailing)
         const commaParts = text.split(/(?<=[^,\s])\s*,\s*(?=[^,\s])/).map(p => p.trim()).filter(Boolean);
 
         for (const part of commaParts) {
@@ -112,29 +129,47 @@
           if (words.length <= 5) {
             lines.push(words.join(' '));
           } else {
-            // 5-WORD LIMIT: wrap into chunks of 4–5 words
-            for (let i = 0; i < words.length; i += 5) {
-              lines.push(words.slice(i, i + 5).join(' '));
-            }
+            // 5-WORD LIMIT: wrap into balanced chunks of ≤5 words
+            lines.push(...chunkText(words));
           }
         }
-        return lines.join('\n');
+        return lines;
       };
 
-      const pushSlide = (tag, content) => {
-        const cleaned = formatLine(content);
-        if (!cleaned) return;
-        slides.push({
+      // Build ONE slide from a pair (1–2) of raw lyric lines.
+      const pairToSlide = (tag, pair) => {
+        const formattedLines = [];
+        pair.forEach(raw => {
+          const formatted = formatLine(raw);
+          if (formatted.length > 0) formattedLines.push(...formatted);
+        });
+        if (formattedLines.length === 0) return null;
+        const content = formattedLines.join('\n');
+        return {
           id: `${itemId}-slide-${slides.length}`,
           itemId,
           tag,
-          content: cleaned,
-          wordCount: cleaned.split(/\s+/).filter(Boolean).length
-        });
-        currentSectionSlides.push(cleaned);
+          content,
+          wordCount: content.split(/\s+/).filter(Boolean).length
+        };
+      };
+
+      const flushPairs = (tag) => {
+        const remaining = currentSectionPlainLines;
+        if (remaining.length === 0) return;
+        // Group every 2 consecutive lines into ONE slide unit
+        for (let i = 0; i < remaining.length; i += 2) {
+          const slide = pairToSlide(tag, remaining.slice(i, i + 2));
+          if (slide) {
+            slides.push(slide);
+            currentSectionSlides.push(slide.content);
+          }
+        }
+        currentSectionPlainLines = [];
       };
 
       const flushSection = () => {
+        flushPairs(currentTag);
         if (currentSectionSlides.length > 0) {
           sectionsJson.push({ name: currentTag, slides: [...currentSectionSlides] });
         }
@@ -151,13 +186,12 @@
           currentTag = headerMatch[1].trim().toUpperCase() || 'VERSE 1';
           const rest = headerMatch[2].trim();
           if (rest) {
-            // Inline text after a header becomes its own slide
-            pushSlide(currentTag, rest);
+            // Inline text after a header joins the next pairing
+            currentSectionPlainLines.push(rest);
           }
           continue;
         }
-        // Each single line of lyrics = one slide (formatted into 1–3 lines)
-        pushSlide(currentTag, line);
+        currentSectionPlainLines.push(line);
       }
       flushSection();
 
@@ -359,6 +393,24 @@
     // ============================================================
     //  PROJECTOR SCREEN (dual-screen output) — WHITE HUD
     // ============================================================
+    // Responsive slide font size — scales down as the line count and
+    // longest line grow so multi-line slides stay readable and never
+    // overflow the projector screen.
+    const getSlideFontSize = (content) => {
+      const text = content ? String(content) : '';
+      if (!text.trim()) return 'clamp(1.5rem, 5vw, 7rem)';
+      const lines = text.split('\n').map(l => l.trim());
+      const lineCount = Math.max(lines.length, 1);
+      const maxLineLen = Math.max(...lines.map(l => l.length), 1);
+
+      // Width constraint: ~82vw usable width; heavy caps glyph ≈ 0.62em
+      const byWidthVw = 82 / (maxLineLen * 0.62);
+      // Height constraint: ~66vh usable height; line-height 1.4; 16:9 vh→vw
+      const byHeightVw = (66 / (lineCount * 1.4)) * 0.5625;
+
+      const targetVw = Math.min(byWidthVw, byHeightVw, 8);
+      return `clamp(1.5rem, ${Math.max(targetVw, 2.2).toFixed(2)}vw, 7rem)`;
+    };
     function ProjectorStage() {
       const [slide, setSlide] = useState({ title: 'CRC CHURCH WORSHIP', content: 'GREETINGS', songTitle: '', groupName: '' });
       const [image, setImage] = useState(null);
@@ -426,11 +478,11 @@
               />
             </div>
           ) : (
-            <div className="flex-1 flex flex-col justify-center items-center px-16 text-center">
+            <div className="flex-1 flex flex-col justify-center items-center px-12 text-center overflow-hidden">
               <p
                 key={animationKey}
-                className={`font-black tracking-wide leading-[1.4] whitespace-pre-wrap text-black uppercase max-w-6xl ${transitionClass}`}
-                style={{ fontSize: 'clamp(2rem, 6vw, 6rem)' }}
+                className={`font-black tracking-wide leading-[1.4] whitespace-pre-wrap text-black uppercase w-full ${transitionClass}`}
+                style={{ fontSize: getSlideFontSize(slide?.content) }}
               >
                 {slide?.content}
               </p>
@@ -1237,7 +1289,7 @@
                               {currentDisplayTitle}
                             </span>
                           )}
-                          <p className="text-[11px] font-black leading-tight whitespace-pre-line text-white uppercase relative z-10 max-h-full overflow-hidden">
+                          <p className="text-[11px] font-black leading-tight whitespace-pre-wrap text-white uppercase relative z-10 max-h-full overflow-hidden">
                             {currentSlide.content}
                           </p>
                         </>
@@ -1339,7 +1391,7 @@
             <div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center">
               <div>
                 <h2 className="text-sm font-black tracking-widest text-white uppercase">Paste Your Lyrics Here</h2>
-                <p className="text-[10px] text-slate-500 mt-0.5">Auto-splits into slides · one line per slide · saved to cloud</p>
+                <p className="text-[10px] text-slate-500 mt-0.5">Auto-splits into slides · 2 lines per slide · saved to cloud</p>
               </div>
               <button
                 onClick={onClose}
@@ -1382,7 +1434,7 @@
                   className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2.5 text-sm font-mono text-slate-200 focus:outline-none focus:border-indigo-500 placeholder:text-slate-600 resize-none"
                 />
                 <p className="text-[10px] text-slate-500 mt-1.5">
-                  💡 Use <code className="text-indigo-400">[Verse 1]</code>, <code className="text-indigo-400">[Chorus]</code>, <code className="text-indigo-400">[Bridge]</code> etc. to mark sections. Each line of lyrics becomes its own slide.
+                  💡 Use <code className="text-indigo-400">[Verse 1]</code>, <code className="text-indigo-400">[Chorus]</code>, <code className="text-indigo-400">[Bridge]</code> etc. to mark sections. Lyric lines are paired (2 lines per slide); long phrases auto-wrap at max 5 words per line.
                 </p>
               </div>
             </div>
