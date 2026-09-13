@@ -77,6 +77,22 @@
     const ACCENT = '#6366F1'; // indigo / violet accent
     const SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbyUU7xzuRTD7rL-8GqZyXe9g6TDjb10QTvtZQyk6qca02Q1Fl6DakR0SBkwTEzorSLuwA/exec';
     const IMAGE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbxb3wysS_kPuPLalOBO2zNBpd8DieoPqIUppy0iJfw6iyrJDQ7x4SEvytyuKYLK1AZL0A/exec';
+    const BIBLE_BOOKS = [
+      ['GEN','Genesis'],['EXO','Exodus'],['LEV','Leviticus'],['NUM','Numbers'],['DEU','Deuteronomy'],
+      ['JOS','Joshua'],['JDG','Judges'],['RUT','Ruth'],['1SA','1 Samuel'],['2SA','2 Samuel'],
+      ['1KI','1 Kings'],['2KI','2 Kings'],['1CH','1 Chronicles'],['2CH','2 Chronicles'],['EZR','Ezra'],
+      ['NEH','Nehemiah'],['EST','Esther'],['JOB','Job'],['PSA','Psalms'],['PRO','Proverbs'],
+      ['ECC','Ecclesiastes'],['SNG','Song of Songs'],['ISA','Isaiah'],['JER','Jeremiah'],['LAM','Lamentations'],
+      ['EZK','Ezekiel'],['DAN','Daniel'],['HOS','Hosea'],['JOL','Joel'],['AMO','Amos'],['OBA','Obadiah'],
+      ['JON','Jonah'],['MIC','Micah'],['NAM','Nahum'],['HAB','Habakkuk'],['ZEP','Zephaniah'],['HAG','Haggai'],
+      ['ZEC','Zechariah'],['MAL','Malachi'],['MAT','Matthew'],['MRK','Mark'],['LUK','Luke'],['JHN','John'],
+      ['ACT','Acts'],['ROM','Romans'],['1CO','1 Corinthians'],['2CO','2 Corinthians'],['GAL','Galatians'],
+      ['EPH','Ephesians'],['PHP','Philippians'],['COL','Colossians'],['1TH','1 Thessalonians'],['2TH','2 Thessalonians'],
+      ['1TI','1 Timothy'],['2TI','2 Timothy'],['TIT','Titus'],['PHM','Philemon'],['HEB','Hebrews'],
+      ['JAS','James'],['1PE','1 Peter'],['2PE','2 Peter'],['1JN','1 John'],['2JN','2 John'],['3JN','3 John'],
+      ['JUD','Jude'],['REV','Revelation']
+    ];
+    const BIBLE_BOOK_NAME = Object.fromEntries(BIBLE_BOOKS);
 
     // ============================================================
     //  LINE-BASED LYRIC PARSER (PAIRED LINES + COMMA BREAK + 5-WORD LIMIT)
@@ -224,13 +240,11 @@
             .replace(/^\s*\*\*(.*?)\*\*\s*$/, '$1')
             .replace(/[ \t]+$/g, '');
           const plain = cleaned.trim().replace(/^\[(.*?)\]$/, '$1').replace(/\s*:\s*$/, '').trim();
-          const section = plain.match(/^(intro|opening|verse\s*\d+|pre[\s-]?chorus(?:\s*\d+)?|chorus(?:\s*\d+)?|bridge(?:\s*\d+)?|interlude|instrumental|outro|ending|tag)$/i);
+          const section = plain.match(/^(intro(?:\s*\d+)?|opening(?:\s*\d+)?|verse\s*\d+|pre[\s-]?chorus(?:\s*\d+)?|chorus(?:\s*\d+)?|bridge(?:\s*\d+)?|interlude(?:\s*\d+)?|instrumental(?:\s*\d+)?|outro(?:\s*\d+)?|ending(?:\s*\d+)?|end(?:\s*\d+)?|tag(?:\s*\d+)?)$/i);
           if (!section) return cleaned;
           const normalized = section[1]
             .replace(/([a-zA-Z])(\d)/g, '$1 $2')
             .replace(/pre[\s-]?chorus/i, 'PRE-CHORUS')
-            .replace(/^opening$/i, 'INTRO')
-            .replace(/^ending$/i, 'OUTRO')
             .toUpperCase();
           return `[${normalized}]`;
         })
@@ -507,13 +521,11 @@
           .replace(/^\[(.*?)\]$/, '$1')
           .replace(/\s*:\s*$/, '')
           .trim();
-        const match = cleaned.match(/^(intro|opening|verse\s*\d+|pre[\s-]?chorus(?:\s*\d+)?|chorus(?:\s*\d+)?|bridge(?:\s*\d+)?|interlude|instrumental|outro|ending|tag)$/i);
+        const match = cleaned.match(/^(intro(?:\s*\d+)?|opening(?:\s*\d+)?|verse\s*\d+|pre[\s-]?chorus(?:\s*\d+)?|chorus(?:\s*\d+)?|bridge(?:\s*\d+)?|interlude(?:\s*\d+)?|instrumental(?:\s*\d+)?|outro(?:\s*\d+)?|ending(?:\s*\d+)?|end(?:\s*\d+)?|tag(?:\s*\d+)?)$/i);
         if (!match) return '';
         return match[1]
           .replace(/([a-zA-Z])(\d)/g, '$1 $2')
           .replace(/pre[\s-]?chorus/i, 'PRE-CHORUS')
-          .replace(/^opening$/i, 'INTRO')
-          .replace(/^ending$/i, 'OUTRO')
           .toUpperCase();
       };
 
@@ -684,6 +696,14 @@
               <div className="text-3xl font-black tracking-wide uppercase">{display.title}</div>
               <audio key={`${animationKey}-${display.src}`} src={display.src} autoPlay loop={!!display.loop} />
             </div>
+          ) : display.type === 'BIBLE' ? (
+            <div className="flex-1 flex flex-col justify-center items-center px-[7vw] text-center overflow-hidden bg-white">
+              <div key={animationKey} className={`w-full ${transitionClass}`}>
+                <p className="font-bold leading-[1.35] text-slate-900" style={{fontSize:'clamp(1.5rem, 3.2vw, 4.6rem)'}}>{display.english}</p>
+                <div className="w-28 h-1 bg-indigo-500 mx-auto my-[3vh] rounded-full"></div>
+                <p lang="ta" className="font-bold leading-[1.45] text-black" style={{fontSize:'clamp(1.6rem, 3.45vw, 5rem)'}}>{display.tamil}</p>
+              </div>
+            </div>
           ) : (
             <div className="flex-1 flex flex-col justify-center items-center px-12 text-center overflow-hidden">
               <p
@@ -727,6 +747,9 @@
       const [activeSectionIdx, setActiveSectionIdx] = useState(0);
       const [activeSlideIdx, setActiveSlideIdx] = useState(0);
       const [pasteOpen, setPasteOpen] = useState(false);
+      const [bibleOpen, setBibleOpen] = useState(false);
+      const [bibleData, setBibleData] = useState({ english: null, tamil: null });
+      const [bibleStatus, setBibleStatus] = useState('not-loaded');
       const [proWindowOpen, setProWindowOpen] = useState(false);
       const proWindowRef = useRef(null);
       const [liveDisplay, setLiveDisplay] = useState(null);
@@ -742,6 +765,43 @@
       const [localFolderStatus, setLocalFolderStatus] = useState('');
       const fileInputRef = useRef(null);
       const folderInputRef = useRef(null);
+      const bibleFolderInputRef = useRef(null);
+
+      // GitHub Pages can load the bundled JSON directly. Local file:// mode
+      // uses the folder picker below because browsers block local fetches.
+      useEffect(() => {
+        if (window.location.protocol === 'file:') return;
+        Promise.all([
+          fetch('bible/data/english.json').then(r => { if (!r.ok) throw new Error('English Bible unavailable'); return r.json(); }),
+          fetch('bible/data/tamil.json').then(r => { if (!r.ok) throw new Error('Tamil Bible unavailable'); return r.json(); })
+        ]).then(([english, tamil]) => {
+          setBibleData({ english, tamil });
+          setBibleStatus('ready');
+        }).catch(() => setBibleStatus('not-loaded'));
+      }, []);
+
+      const handleBibleFolder = async (e) => {
+        const files = Array.from(e.target.files || []);
+        e.target.value = '';
+        const englishFile = files.find(f => f.name.toLowerCase() === 'english.json');
+        const tamilFile = files.find(f => f.name.toLowerCase() === 'tamil.json');
+        if (!englishFile || !tamilFile) {
+          setBibleStatus('error');
+          alert('Please select the bible folder containing data/english.json and data/tamil.json.');
+          return;
+        }
+        setBibleStatus('loading');
+        try {
+          const [english, tamil] = await Promise.all([englishFile.text().then(JSON.parse), tamilFile.text().then(JSON.parse)]);
+          setBibleData({ english, tamil });
+          setBibleStatus('ready');
+          setBibleOpen(true);
+        } catch (err) {
+          console.error('Bible folder could not be read:', err);
+          setBibleStatus('error');
+          alert('The Bible JSON files could not be read. Please select the generated bible folder again.');
+        }
+      };
 
       // Fetch cloud library from Google Sheets on mount
       const refreshCloud = useCallback(() => {
@@ -772,18 +832,18 @@
       // Active item from the service queue
       const activeItem = serviceQueue.find(i => i.id === activeItemId) || null;
 
-      // Group the active item's slides by section tag.
-      // Each slide carries its original flat index within the item so we can
-      // navigate sequentially across section boundaries.
+      // Preserve the pasted section sequence. Only adjacent slides with the
+      // exact same label belong to one section. A later CHORUS, CHORUS 1,
+      // INTRO 1, etc. remains a separate occurrence instead of being merged
+      // back into an earlier group.
       const groupedSlides = useMemo(() => {
         const groups = [];
-        const map = {};
         (activeItem?.slides || []).forEach((s, flatIdx) => {
-          if (!map[s.tag]) {
-            map[s.tag] = [];
-            groups.push({ tag: s.tag, slides: map[s.tag] });
+          const previousGroup = groups[groups.length - 1];
+          if (!previousGroup || previousGroup.tag !== s.tag) {
+            groups.push({ tag: s.tag, slides: [] });
           }
-          map[s.tag].push({ ...s, flatIdx });
+          groups[groups.length - 1].slides.push({ ...s, flatIdx });
         });
         return groups;
       }, [activeItem]);
@@ -1236,6 +1296,11 @@
 
             <div className="flex items-center space-x-3">
               <button
+                onClick={() => setBibleOpen(true)}
+                className="px-4 py-1.5 text-[11px] rounded-md font-black uppercase tracking-wider transition border bg-amber-500/10 border-amber-500/40 hover:bg-amber-500/20 text-amber-300"
+              >📖 BIBLE {bibleStatus === 'ready' ? '●' : ''}</button>
+
+              <button
                 onClick={() => setPasteOpen(true)}
                 className="px-4 py-1.5 text-[11px] rounded-md font-black uppercase tracking-wider transition border bg-slate-800 border-slate-700 hover:border-slate-600 text-slate-200 hover:bg-slate-700"
               >
@@ -1507,7 +1572,7 @@
 
                       <div className="space-y-5">
                         {groupedSlides.map((group, sectionIdx) => (
-                          <div key={group.tag}>
+                          <div key={`${group.tag}-${sectionIdx}`}>
                             <div className="flex items-center space-x-2 mb-2 px-1">
                               <span className="text-[9px] font-black tracking-[0.2em] px-2 py-1 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
                                 {group.tag}
@@ -1609,6 +1674,12 @@
                         <video src={liveDisplay.src} autoPlay muted loop={!!liveDisplay.loop} className="absolute inset-0 w-full h-full object-contain" />
                       ) : liveDisplay?.type === 'AUDIO' ? (
                         <div className="relative z-10 text-white"><div className="text-3xl">♫</div><div className="text-[10px] font-bold mt-2">{liveDisplay.title}</div></div>
+                      ) : liveDisplay?.type === 'BIBLE' ? (
+                        <div className="relative z-10 px-2">
+                          <p className="text-[9px] font-bold leading-snug text-slate-100 normal-case">{liveDisplay.english}</p>
+                          <div className="h-px bg-indigo-400/60 my-2"></div>
+                          <p lang="ta" className="text-[10px] font-bold leading-snug text-white normal-case">{liveDisplay.tamil}</p>
+                        </div>
                       ) : liveDisplay?.content ? (
                         <>
                           {liveDisplay.title && (
@@ -1707,12 +1778,226 @@
             onChange={handleServiceFolder}
             className="hidden"
           />
+          <input
+            ref={bibleFolderInputRef}
+            type="file"
+            webkitdirectory=""
+            directory=""
+            multiple
+            accept=".json,application/json"
+            onChange={handleBibleFolder}
+            className="hidden"
+          />
+          {bibleOpen && (
+            <BibleModal
+              bibleData={bibleData}
+              status={bibleStatus}
+              onConnect={() => bibleFolderInputRef.current && bibleFolderInputRef.current.click()}
+              onClose={() => setBibleOpen(false)}
+              onGoLive={(payload) => broadcastDisplay(payload, '')}
+            />
+          )}
           {pasteOpen && (
             <PasteLyricsModal
               onClose={() => setPasteOpen(false)}
               onSubmit={addSongFromLyrics}
             />
           )}
+        </div>
+      );
+    }
+
+    // ============================================================
+    //  LOCAL BILINGUAL BIBLE MODAL
+    // ============================================================
+    function BibleModal({ bibleData, status, onConnect, onClose, onGoLive }) {
+      const [book, setBook] = useState('JHN');
+      const [chapter, setChapter] = useState(3);
+      const [verseStart, setVerseStart] = useState(16);
+      const [verseEnd, setVerseEnd] = useState(16);
+      const [passageMode, setPassageMode] = useState(false);
+      const [waitingForEnd, setWaitingForEnd] = useState(false);
+      const [currentVerse, setCurrentVerse] = useState(16);
+      const [query, setQuery] = useState('');
+
+      const allKeys = useMemo(() => {
+        const keys = new Set([
+          ...Object.keys(bibleData.english || {}),
+          ...Object.keys(bibleData.tamil || {})
+        ]);
+        return Array.from(keys);
+      }, [bibleData]);
+
+      const chapters = useMemo(() => {
+        const values = allKeys.filter(k => k.startsWith(`${book}.`)).map(k => Number(k.split('.')[1])).filter(Number.isFinite);
+        return [...new Set(values)].sort((a,b) => a-b);
+      }, [allKeys, book]);
+
+      const verses = useMemo(() => {
+        const prefix = `${book}.${chapter}.`;
+        const values = allKeys.filter(k => k.startsWith(prefix)).flatMap(k => {
+          const raw = k.slice(prefix.length);
+          const match = raw.match(/^(\d+)(?:-(\d+))?/);
+          if (!match) return [];
+          const start = Number(match[1]);
+          const end = Number(match[2] || match[1]);
+          return Array.from({length: end - start + 1}, (_, index) => start + index);
+        }).filter(Number.isFinite);
+        return [...new Set(values)].sort((a,b) => a-b);
+      }, [allKeys, book, chapter]);
+
+      useEffect(() => {
+        if (chapters.length && !chapters.includes(chapter)) setChapter(chapters[0]);
+      }, [book, chapters]);
+
+      useEffect(() => {
+        if (verses.length && !verses.includes(verseStart)) {
+          setVerseStart(verses[0]);
+          setVerseEnd(verses[0]);
+          setCurrentVerse(verses[0]);
+        }
+      }, [book, chapter, verses]);
+
+      const lookupVerse = (data, verse) => {
+        const direct = data?.[`${book}.${chapter}.${verse}`];
+        if (direct) return direct;
+        const rangedKey = Object.keys(data || {}).find(k => {
+          const match = k.match(new RegExp(`^${book}\\.${chapter}\\.(\\d+)-(\\d+)$`));
+          return match && verse >= Number(match[1]) && verse <= Number(match[2]);
+        });
+        return rangedKey ? data[rangedKey] : '';
+      };
+      const passageVerses = verses.filter(v => v >= verseStart && v <= verseEnd);
+      const english = lookupVerse(bibleData.english, currentVerse);
+      const tamil = lookupVerse(bibleData.tamil, currentVerse);
+      const reference = `${BIBLE_BOOK_NAME[book]} ${chapter}:${currentVerse}`;
+      const passageReference = `${BIBLE_BOOK_NAME[book]} ${chapter}:${verseStart}${verseEnd > verseStart ? `–${verseEnd}` : ''}`;
+
+      const filteredBooks = BIBLE_BOOKS.filter(([code, name]) => `${code} ${name}`.toLowerCase().includes(query.trim().toLowerCase()));
+      const chooseBook = (code) => {
+        setBook(code);
+        setChapter(1);
+        setVerseStart(1);
+        setVerseEnd(1);
+        setCurrentVerse(1);
+        setWaitingForEnd(false);
+      };
+      const selectVerse = (verse) => {
+        if (!passageMode) {
+          setVerseStart(verse);
+          setVerseEnd(verse);
+          setCurrentVerse(verse);
+          return;
+        }
+        if (!waitingForEnd) {
+          setVerseStart(verse);
+          setVerseEnd(verse);
+          setCurrentVerse(verse);
+          setWaitingForEnd(true);
+        } else {
+          const start = Math.min(verseStart, verse);
+          const end = Math.max(verseStart, verse);
+          setVerseStart(start);
+          setVerseEnd(end);
+          setCurrentVerse(start);
+          setWaitingForEnd(false);
+        }
+      };
+      const setMode = (isPassage) => {
+        setPassageMode(isPassage);
+        setWaitingForEnd(false);
+        if (!isPassage) {
+          setVerseStart(currentVerse);
+          setVerseEnd(currentVerse);
+        }
+      };
+      const presentVerse = (verse = currentVerse) => {
+        const englishText = lookupVerse(bibleData.english, verse);
+        const tamilText = lookupVerse(bibleData.tamil, verse);
+        if (!englishText && !tamilText) return;
+        const verseReference = `${BIBLE_BOOK_NAME[book]} ${chapter}:${verse}`;
+        setCurrentVerse(verse);
+        onGoLive({ type:'BIBLE', title:verseReference, songTitle:verseReference, groupName:'WEBU · TAMIL OTCV', english:englishText, tamil:tamilText });
+      };
+      const movePassage = (direction) => {
+        const index = passageVerses.indexOf(currentVerse);
+        const nextIndex = Math.max(0, Math.min(index + direction, passageVerses.length - 1));
+        if (passageVerses[nextIndex] != null) presentVerse(passageVerses[nextIndex]);
+      };
+
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm p-5">
+          <div className="w-full max-w-6xl h-[90vh] flex flex-col bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden">
+            <div className="px-5 py-3 border-b border-slate-800 flex justify-between items-center shrink-0">
+              <div>
+                <h2 className="text-sm font-black tracking-widest text-white uppercase">Bilingual Bible</h2>
+                <p className="text-[10px] text-slate-500 mt-0.5">English WEBU + Tamil OTCV · local and offline</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={`text-[9px] font-bold px-2 py-1 rounded ${status === 'ready' ? 'text-emerald-400 bg-emerald-500/10' : 'text-amber-300 bg-amber-500/10'}`}>{status === 'ready' ? '● BIBLE READY' : status === 'loading' ? 'READING…' : 'BIBLE NOT CONNECTED'}</span>
+                <button onClick={onConnect} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[10px] font-black text-white">📁 SELECT BIBLE FOLDER</button>
+                <button onClick={onClose} className="px-2 text-slate-500 hover:text-white text-lg font-bold">✕</button>
+              </div>
+            </div>
+
+            {status !== 'ready' ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
+                <div className="text-6xl mb-4">📖</div>
+                <div className="text-white font-black tracking-wide">Connect the generated Bible folder</div>
+                <p className="text-xs text-slate-500 mt-2 max-w-lg">Select the project’s <span className="text-indigo-300">bible</span> folder. It must contain <span className="text-indigo-300">data/english.json</span> and <span className="text-indigo-300">data/tamil.json</span>.</p>
+                <button onClick={onConnect} className="mt-5 px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-black text-white">SELECT BIBLE FOLDER</button>
+              </div>
+            ) : (
+              <div className="flex-1 flex min-h-0">
+                <aside className="w-64 border-r border-slate-800 p-3 flex flex-col min-h-0">
+                  <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search book…" className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500" />
+                  <div className="flex-1 overflow-y-auto mt-2 space-y-1">
+                    {filteredBooks.map(([code,name]) => <button key={code} onClick={() => chooseBook(code)} className={`w-full text-left px-3 py-2 rounded-lg text-[11px] font-bold ${book === code ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>{name}</button>)}
+                  </div>
+                </aside>
+                <main className="flex-1 p-5 overflow-y-auto">
+                  <div>
+                    <label className="text-[9px] font-black tracking-wider text-slate-500 uppercase">Book<select value={book} onChange={e => chooseBook(e.target.value)} className="mt-1 w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2.5 text-xs text-white">{BIBLE_BOOKS.map(([code,name]) => <option key={code} value={code}>{name}</option>)}</select></label>
+                  </div>
+                  <div className="mt-4">
+                    <div className="text-[9px] font-black tracking-wider text-slate-500 uppercase mb-2">Chapter</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {chapters.map(c => <button key={c} onClick={() => {setChapter(c);setVerseStart(1);setVerseEnd(1);setCurrentVerse(1);setWaitingForEnd(false);}} className={`min-w-9 h-9 px-2 rounded-lg text-[11px] font-black border ${chapter === c ? 'bg-amber-500 border-amber-300 text-slate-950' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'}`}>{c}</button>)}
+                    </div>
+                  </div>
+                  <div className="mt-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-[9px] font-black tracking-wider text-slate-500 uppercase">Verse</div>
+                      <div className="flex rounded-lg bg-slate-800 border border-slate-700 p-0.5">
+                        <button onClick={() => setMode(false)} className={`px-3 py-1.5 rounded-md text-[9px] font-black ${!passageMode ? 'bg-indigo-600 text-white' : 'text-slate-400'}`}>SINGLE VERSE</button>
+                        <button onClick={() => setMode(true)} className={`px-3 py-1.5 rounded-md text-[9px] font-black ${passageMode ? 'bg-indigo-600 text-white' : 'text-slate-400'}`}>PASSAGE</button>
+                      </div>
+                    </div>
+                    {passageMode && <div className="text-[10px] text-amber-300 mb-2">{waitingForEnd ? `Start: verse ${verseStart}. Now click the last verse.` : verseEnd > verseStart ? `${passageReference} selected · ${passageVerses.length} slides` : 'Click the first verse, then click the last verse.'}</div>}
+                    <div className="flex flex-wrap gap-1.5">
+                      {verses.map(v => <button key={v} onClick={() => selectVerse(v)} className={`w-9 h-9 rounded-lg text-[11px] font-black border ${v >= verseStart && v <= verseEnd ? (v === currentVerse ? 'bg-rose-600 border-rose-400 text-white' : 'bg-indigo-600 border-indigo-400 text-white') : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'}`}>{v}</button>)}
+                    </div>
+                  </div>
+                  <div className="mt-5 rounded-2xl border border-slate-700 bg-white text-center p-7 min-h-64 flex flex-col justify-center">
+                    <div className="text-xs font-black tracking-widest text-indigo-600 uppercase mb-4">{reference}</div>
+                    <p className="text-xl md:text-2xl font-bold leading-relaxed text-slate-900 normal-case">{english || 'English text unavailable for this reference.'}</p>
+                    <div className="w-20 h-1 bg-indigo-500 mx-auto my-5 rounded-full"></div>
+                    <p lang="ta" className="text-2xl md:text-3xl font-bold leading-relaxed text-black normal-case">{tamil || 'இந்த வசனத்திற்கான தமிழ் உரை கிடைக்கவில்லை.'}</p>
+                  </div>
+                </main>
+              </div>
+            )}
+            <div className="px-5 py-3 border-t border-slate-800 flex justify-between items-center shrink-0">
+              <span className="text-[10px] text-slate-500">{passageMode && passageVerses.length > 1 ? `${passageReference} · slide ${passageVerses.indexOf(currentVerse) + 1} of ${passageVerses.length}` : 'English and Tamil go live together.'}</span>
+              <div className="flex items-center gap-2">
+                {passageMode && passageVerses.length > 1 && <>
+                  <button onClick={() => movePassage(-1)} disabled={currentVerse === passageVerses[0]} className="px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white text-[10px] font-black">◀ PREVIOUS</button>
+                  <button onClick={() => movePassage(1)} disabled={currentVerse === passageVerses[passageVerses.length - 1]} className="px-4 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white text-[10px] font-black">NEXT ▶</button>
+                </>}
+                <button onClick={() => presentVerse()} disabled={status !== 'ready' || waitingForEnd || (!english && !tamil)} className="px-8 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-30 text-white text-xs font-black tracking-[0.16em]">● GO LIVE</button>
+              </div>
+            </div>
+          </div>
         </div>
       );
     }
