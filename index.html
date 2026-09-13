@@ -778,8 +778,8 @@
       useEffect(() => {
         if (window.location.protocol === 'file:') return;
         Promise.all([
-          fetch('bible/data/english.json').then(r => { if (!r.ok) throw new Error('English Bible unavailable'); return r.json(); }),
-          fetch('bible/data/tamil.json').then(r => { if (!r.ok) throw new Error('Tamil Bible unavailable'); return r.json(); })
+          fetch('bible/data/english.json?v=3').then(r => { if (!r.ok) throw new Error('English Bible unavailable'); return r.json(); }),
+          fetch('bible/data/tamil.json?v=3').then(r => { if (!r.ok) throw new Error('Tamil Bible unavailable'); return r.json(); })
         ]).then(([english, tamil]) => {
           setBibleData({ english, tamil });
           setBibleStatus('ready');
@@ -1864,14 +1864,23 @@
         }
       }, [book, chapter, verses]);
 
+      const cleanBibleValue = (value) => {
+        let text = String(value || '');
+        let previous = null;
+        while (previous !== text) {
+          previous = text;
+          text = text.replace(/\\\+?w\s+([^|\\]*?)(?:\|[^\\]*?)?\\\+?w\*/gi, '$1');
+        }
+        return text.replace(/\\\+?[a-z][a-z0-9-]*\*?\s*/gi, ' ').replace(/\s+([,.;:!?…])/g, '$1').replace(/\s+/g, ' ').trim();
+      };
       const lookupVerse = (data, verse) => {
         const direct = data?.[`${book}.${chapter}.${verse}`];
-        if (direct) return direct;
+        if (direct) return cleanBibleValue(direct);
         const rangedKey = Object.keys(data || {}).find(k => {
           const match = k.match(new RegExp(`^${book}\\.${chapter}\\.(\\d+)-(\\d+)$`));
           return match && verse >= Number(match[1]) && verse <= Number(match[2]);
         });
-        return rangedKey ? data[rangedKey] : '';
+        return rangedKey ? cleanBibleValue(data[rangedKey]) : '';
       };
       const passageVerses = verses.filter(v => v >= verseStart && v <= verseEnd);
       const english = lookupVerse(bibleData.english, currentVerse);
