@@ -647,13 +647,19 @@
             try { localStorage.setItem('worship_console_transition', e.data.transition); } catch (err) {}
           }
         };
+        const handleStorage = (e) => {
+          if (e.key !== 'worship_console_last_slide' || !e.newValue) return;
+          try { applyContent(JSON.parse(e.newValue)); } catch (err) {}
+        };
         channel.onmessage = handleMessage;
         // postMessage is also used because file:// pages do not consistently
         // share a BroadcastChannel storage key across separate windows.
         window.addEventListener('message', handleMessage);
+        window.addEventListener('storage', handleStorage);
         return () => {
           channel.close();
           window.removeEventListener('message', handleMessage);
+          window.removeEventListener('storage', handleStorage);
           if (projectorMediaUrlRef.current) URL.revokeObjectURL(projectorMediaUrlRef.current);
         };
       }, []);

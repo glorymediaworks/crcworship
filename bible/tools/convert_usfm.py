@@ -23,10 +23,10 @@ BOOK_ORDER = [
 BOOK_SET = set(BOOK_ORDER)
 
 NOTE_RE = re.compile(r"\\(?:f|fe|x)\b.*?\\(?:f|fe|x)\*", re.DOTALL)
-WORD_RE = re.compile(r"\\w\s+([^|\\]*?)(?:\|[^\\]*?)?\\w\*")
+WORD_RE = re.compile(r"\\\+?w\s+([^|\\]*?)(?:\|[^\\]*?)?\\\+?w\*")
 FIG_RE = re.compile(r"\\fig\b.*?\\fig\*", re.DOTALL)
 MILESTONE_RE = re.compile(r"\\(?:qt-s|qt-e|ts-s|ts-e)\\?[^\\]*?\\\*")
-MARKER_RE = re.compile(r"\\[a-z][a-z0-9-]*(?:\s+\d+)?\*?\s*", re.IGNORECASE)
+MARKER_RE = re.compile(r"\\\+?[a-z][a-z0-9-]*(?:\s+\d+)?\*?\s*", re.IGNORECASE)
 
 
 def clean_usfm_text(value: str) -> str:
@@ -40,7 +40,9 @@ def clean_usfm_text(value: str) -> str:
         previous = value
         value = WORD_RE.sub(lambda match: match.group(1), value)
     value = re.sub(r"\|[a-z][^\\\s]*(?:=\"[^\"]*\")?", "", value, flags=re.IGNORECASE)
-    value = MARKER_RE.sub("", value)
+    # Replace remaining character markers with a space so words separated by
+    # closing/opening markers (for example ``born\\wj* \\wj Son``) do not join.
+    value = MARKER_RE.sub(" ", value)
     value = html.unescape(value)
     value = re.sub(r"\s+([,.;:!?…])", r"\1", value)
     value = re.sub(r"\s+", " ", value).strip()
